@@ -58,10 +58,21 @@ public sealed class SessionTracker : IDisposable
             return;
         }
 
+        // Folder tabs and log tabs are the same collection, so split them here:
+        // LogFileValidator rejects directories, so a folder path left in Files
+        // would come back as a "missing file" on the next restore.
         var files = new List<string>();
+        var folders = new List<string>();
         foreach (var tab in _tabs)
         {
-            AddIfMissing(files, tab.FilePath);
+            if (tab.IsFolder)
+            {
+                AddIfMissing(folders, tab.FilePath);
+            }
+            else
+            {
+                AddIfMissing(files, tab.FilePath);
+            }
         }
 
         foreach (var path in _unresolved)
@@ -69,7 +80,11 @@ public sealed class SessionTracker : IDisposable
             AddIfMissing(files, path);
         }
 
-        _store.Save(new SessionState(files, _currentSelected?.FilePath));
+        var selected = _currentSelected;
+        var activeFile = selected is { IsFolder: false } ? selected.FilePath : null;
+        var activeFolder = selected is { IsFolder: true } ? selected.FilePath : null;
+
+        _store.Save(new SessionState(files, activeFile, folders, activeFolder));
     }
 
     public void Dispose()

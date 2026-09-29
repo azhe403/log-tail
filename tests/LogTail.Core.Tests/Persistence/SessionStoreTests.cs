@@ -60,4 +60,41 @@ public sealed class SessionStoreTests : IDisposable
         result.Files.Should().BeEmpty();
         result.ActiveFile.Should().BeNull();
     }
+
+    [Fact]
+    public void Load_WhenJsonOmitsWorkspaceFields_LeavesWorkspaceEmpty()
+    {
+        // Sessions written before folder tabs existed must keep loading.
+        File.WriteAllText(
+            Path.Combine(_tempDir, "session.json"),
+            """
+            { "Files": [ "a.log" ], "ActiveFile": "a.log" }
+            """);
+        var sut = new SessionStore(_tempDir);
+
+        var result = sut.Load();
+
+        result.Files.Should().Equal("a.log");
+        result.ActiveFile.Should().Be("a.log");
+        result.WorkspaceFolders.Should().BeNull();
+        result.ActiveFolder.Should().BeNull();
+    }
+
+    [Fact]
+    public void Save_WhenWorkspaceFoldersPresent_RoundtripsFoldersAndActiveFolder()
+    {
+        var sut = new SessionStore(_tempDir);
+        var state = new SessionState(
+            new[] { "a.log" },
+            "a.log",
+            new[] { @"C:\logs\app", @"C:\logs\web" },
+            @"C:\logs\app");
+
+        sut.Save(state);
+        var loaded = sut.Load();
+
+        loaded.Files.Should().Equal("a.log");
+        loaded.WorkspaceFolders.Should().Equal(@"C:\logs\app", @"C:\logs\web");
+        loaded.ActiveFolder.Should().Be(@"C:\logs\app");
+    }
 }

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -10,6 +10,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets the test project reach internal state (watched folder, rate
+         subscription count) that has no public surface. -->
+    <InternalsVisibleTo Include="LogTail.UI.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LogTail.Core\LogTail.Core.csproj" />

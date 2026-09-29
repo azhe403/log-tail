@@ -10,10 +10,12 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
+using System.IO;
 using Avalonia.ReactiveUI;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LogTail.Core.Models;
+using LogTail.Core.Workspace;
 using LogTail.UI.ViewModels;
 using ReactiveUI;
 
@@ -52,23 +54,61 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
                 .Subscribe(_ => RequestScrollToBottom())
                 .DisposeWith(disposables);
 
-            // Subscribe to collection changes for auto-scroll on new log items
+            // Subscribe to collection changes for auto-scroll on new log items.
+            // Tracked on ActiveLogTab, not SelectedTab: previewing another file
+            // inside the same folder tab swaps the log being displayed without
+            // the tab itself changing.
             if (ViewModel != null)
             {
-                this.WhenAnyValue(x => x.ViewModel!.SelectedTab)
+                this.WhenAnyValue(x => x.ViewModel!.ActiveLogTab)
                     .DistinctUntilChanged()
                     .ObserveOn(RxApp.MainThreadScheduler)
                     .Subscribe(_ => AttachSelectedTabScrollListener(disposables))
                     .DisposeWith(disposables);
             }
 
-            AttachScrollViewerListener(disposables);
+            AttachUserSelectionForwarding(disposables);
         });
     }
 
-    private void AttachScrollViewerListener(CompositeDisposable disposables)
+    /// <summary>
+    /// Keeps the ViewModel as the single owner of which tab is selected.
+    ///
+    /// SelectedItem is OneWay, because Avalonia's Selector writes its selection
+    /// back on a TwoWay binding. While ItemsSource materializes it passes through
+    /// index 0 and then its own default, and every one of those transient states
+    /// reaches the ViewModel as an apparent tab switch — restarting the tail and
+    /// discarding the source that just read the file, and persisting the wrong
+    /// ActiveFile into session.json.
+    ///
+    /// Two things replace that write-back. The bound value is re-asserted once the
+    /// control has laid out, because SelectedItem is applied before the restored
+    /// tabs materialize and is silently dropped at that point. And genuine user
+    /// clicks are forwarded back, deferred one dispatcher turn so startup churn
+    /// has settled and only a selection the user actually lands on is propagated.
+    /// </summary>
+    private void AttachUserSelectionForwarding(CompositeDisposable disposables)
     {
-        // Scroll-viewer detection is wired per active tab in AttachSelectedTabScrollListener.
+        if (this.FindControl<TabControl>("MainTabControl") is not { } tabControl || ViewModel is not { } vm)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () => tabControl.SelectedItem = vm.SelectedTab,
+            DispatcherPriority.Loaded);
+
+        // Local function so the delegate type follows SelectionChanged's own
+        // signature instead of naming it.
+        void ForwardSelection(object? sender, EventArgs e) => Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(vm.SelectedTab, tabControl.SelectedItem))
+            {
+                vm.SelectedTab = tabControl.SelectedItem as TabViewModel;
+            }
+        });
+        tabControl.SelectionChanged += ForwardSelection;
+        Disposable.Create(() => tabControl.SelectionChanged -= ForwardSelection).DisposeWith(disposables);
     }
 
     private void AttachSelectedTabScrollListener(CompositeDisposable disposables)
@@ -77,7 +117,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         _activeTabListener = null;
         _scrollViewer = null;
 
-        if (ViewModel?.SelectedTab == null)
+        if (ViewModel?.ActiveLogTab == null)
         {
             return;
         }
@@ -86,7 +126,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         // sampai viewer baru selesai layout agar AutoScroll tidak ikut mati.
         _suppressOffsetEvents = true;
 
-        var tab = ViewModel.SelectedTab;
+        var tab = ViewModel.ActiveLogTab;
         var tabDisposables = new CompositeDisposable();
         _activeTabListener = tabDisposables;
         Disposable.Create(() => tabDisposables.Dispose()).DisposeWith(disposables);
@@ -176,7 +216,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
 
     private void ScrollToBottom()
     {
-        if (ViewModel?.SelectedTab == null || ViewModel.SelectedTab.LogEvents.Count == 0) return;
+        if (ViewModel?.ActiveLogTab is not { } active || active.LogEvents.Count == 0) return;
 
         _isProgrammaticScroll = true;
         try
@@ -265,24 +305,79 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
             return;
         }
 
-        foreach (var file in files)
+        foreach (var item in files)
         {
-            if (file is not IStorageFile storageFile)
+            // Avalonia 11: Path is Uri, LocalPath may be encoded or not rooted on some platforms.
+            var raw = item.Path.ToString();
+            string path;
+            try { path = item.Path.LocalPath; } catch { path = raw; }
+            try { path = Uri.UnescapeDataString(path); } catch { }
+            if (!Path.IsPathRooted(path))
+                try { path = new Uri(raw).LocalPath; } catch { }
+
+            if (item is IStorageFolder || Directory.Exists(path))
             {
-                // Folders arrive as IStorageFolder; silently ignore per spec.
+                vm.OpenFolderTab(path);
                 continue;
             }
 
-            var path = storageFile.Path.LocalPath;
+            if (item is not IStorageFile) continue;
+            if (!File.Exists(path)) continue;
+
             if (LogFileValidator.TryValidateFile(path, out var error))
-            {
                 vm.AddTab(path);
-            }
             else if (error != null)
-            {
                 vm.StatusMessage = error;
-            }
         }
+    }
+
+    /// <summary>
+    /// Single click in the sidebar: show the log in the tab that is on screen.
+    /// The selection is also bound to <c>SelectedWorkspaceFile</c>, which does
+    /// the same thing; this handler covers the case where the pointer event
+    /// arrives without the selection changing. Both are idempotent for the same
+    /// file, and the view model interlocks a log-tab retarget so the pair cannot
+    /// start two tail sources.
+    ///
+    /// PointerPressed rather than PointerReleased, because a release fires on
+    /// both clicks of a double-click and the second one has to reach
+    /// <see cref="OnWorkspaceFileActivated"/> alone.
+    /// </summary>
+    private async void OnWorkspaceFileClicked(object? sender, PointerPressedEventArgs e)
+    {
+        // The second click of a double-click belongs to OnWorkspaceFileActivated.
+        // Retargeting here first would make FindTabByPath find the tab this very
+        // click moved, so no new tab would open and the previous file would be
+        // dropped from the strip.
+        if (e.ClickCount > 1)
+        {
+            return;
+        }
+
+        if (sender is not ListBox list ||
+            list.SelectedItem is not WorkspaceFile file ||
+            string.IsNullOrEmpty(file.Path) ||
+            ViewModel == null)
+        {
+            return;
+        }
+
+        await ViewModel.ShowWorkspaceFileAsync(file.Path);
+    }
+
+    private async void OnWorkspaceFileActivated(object? sender, TappedEventArgs e)
+    {
+        // The overflow node carries no path, and folders are not log files —
+        // only listed files open a tab.
+        if (sender is not ListBox list ||
+            list.SelectedItem is not WorkspaceFile file ||
+            string.IsNullOrEmpty(file.Path) ||
+            ViewModel == null)
+        {
+            return;
+        }
+
+        await ViewModel.OpenFileAndAddTabAsync(file.Path);
     }
 
     private async void OnTabLogPointerPressed(object? sender, PointerPressedEventArgs e)

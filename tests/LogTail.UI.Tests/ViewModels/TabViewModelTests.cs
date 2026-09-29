@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using FluentAssertions;
 using LogTail.Core.Models;
 using LogTail.UI.ViewModels;
@@ -7,6 +10,68 @@ namespace LogTail.UI.Tests.ViewModels;
 
 public class TabViewModelTests
 {
+    [Fact]
+    public void FolderTab_LabelsWithNameAndParentFolder()
+    {
+        // Two workspaces can share a name (logs\app vs archive\app), so the
+        // parent is what tells their tabs apart.
+        var vm = new TabViewModel(Path.Combine("C:", "logs", "app"), isFolder: true);
+
+        vm.FileName.Should().Be("app (logs)");
+    }
+
+    [Fact]
+    public void FolderTab_LabelsWithImmediateParentOnly()
+    {
+        var vm = new TabViewModel(Path.Combine("C:", "logs", "web", "api"), isFolder: true);
+
+        vm.FileName.Should().Be("api (web)");
+    }
+
+    [Fact]
+    public void FolderTab_AtFilesystemRoot_ShowsNameWithoutParent()
+    {
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+
+        var vm = new TabViewModel(root, isFolder: true);
+
+        vm.FileName.Should().Be(root);
+    }
+
+    [Fact]
+    public void SetPreview_AnnouncesTheNewLogSource()
+    {
+        // The log view binds LogSource.LogEvents. Without this notification the
+        // binding keeps the old (empty) collection and the preview area stays
+        // blank even though the preview exists.
+        var vm = new TabViewModel("/logs", isFolder: true);
+        var announced = new List<string?>();
+        vm.PropertyChanged += (_, e) => announced.Add(e.PropertyName);
+
+        vm.SetPreview(new TabViewModel("/logs/app.log"));
+
+        announced.Should().Contain(nameof(TabViewModel.LogSource));
+        announced.Should().Contain(nameof(TabViewModel.ShowsLog));
+        vm.LogSource.FilePath.Should().Be("/logs/app.log");
+        vm.ShowsLog.Should().BeTrue();
+    }
+
+    [Fact]
+    public void LoadFile_RetargetsTheTabAtAnotherFile()
+    {
+        var vm = new TabViewModel("/logs/first.log");
+        vm.AddLogEvent(EnrichedLogEventFactory.CreateSample());
+        vm.LineCount.Should().Be(1);
+
+        vm.LoadFile("/logs/second.log");
+
+        vm.FilePath.Should().Be("/logs/second.log");
+        vm.FileName.Should().Be("second.log");
+        vm.LogEvents.Should().BeEmpty();
+        vm.LineCount.Should().Be(0);
+        vm.TotalLinesAppended.Should().Be(0);
+    }
+
     [Fact]
     public void Constructor_SetsInitialValues()
     {

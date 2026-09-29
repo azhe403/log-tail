@@ -123,14 +123,20 @@ public partial class App : Application
         SessionTracker tracker)
     {
         var session = sessionStore.Load();
-        if (session.Files.Count == 0)
+
+        // Folder tabs first: the sidebar list is built from them, and the
+        // active one is re-selected below once the log tabs exist.
+        if (session.WorkspaceFolders is { Count: > 0 })
         {
-            return;
+            viewModel.RestoreWorkspaces(session.WorkspaceFolders);
         }
 
         var valid = new List<string>();
         var missing = new List<string>();
-        foreach (var path in session.Files)
+        // Files is declared non-null, but a hand-edited or truncated
+        // session.json deserializes it as null, and an NRE here would kill
+        // startup with no dialog.
+        foreach (var path in session.Files ?? (IReadOnlyList<string>)Array.Empty<string>())
         {
             if (LogFileValidator.TryValidateFile(path, out _))
             {
@@ -143,7 +149,25 @@ public partial class App : Application
         }
 
         tracker.SeedUnresolved(missing);
-        viewModel.RestoreTabs(valid, session.ActiveFile);
+
+        if (valid.Count > 0)
+        {
+            viewModel.RestoreTabs(valid, session.ActiveFile);
+        }
+
+        // A folder tab was the active tab last session. Nothing else selects
+        // it, and RestoreTabs has just claimed SelectedTab for the log side.
+        if (session.ActiveFolder is { } activeFolder)
+        {
+            var folderTab = viewModel.Tabs.FirstOrDefault(t =>
+                t.IsFolder &&
+                string.Equals(t.FilePath, activeFolder, StringComparison.OrdinalIgnoreCase));
+
+            if (folderTab is not null)
+            {
+                viewModel.SelectedTab = folderTab;
+            }
+        }
 
         if (missing.Count > 0)
         {

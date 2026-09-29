@@ -4,6 +4,7 @@
                     xmlns:rxui="using:Avalonia.ReactiveUI"
                     xmlns:vm="using:LogTail.UI.ViewModels"
                     xmlns:models="using:LogTail.Core.Models"
+                    xmlns:ws="using:LogTail.Core.Workspace"
                     xmlns:views="using:LogTail.UI.Views"
                     xmlns:converters="using:Avalonia.Data.Converters"
                     x:Class="LogTail.UI.Views.MainWindow"
@@ -29,8 +30,97 @@
     </Style>
   </rxui:ReactiveWindow.Styles>
 
-  <Grid>
-    <DockPanel LastChildFill="True">
+  <Grid ColumnDefinitions="300,*">
+    <!-- Sidebar: navigates the log files inside the current folder tab.
+         Tabs switch folders, so this is the only place to move between logs. -->
+    <Border Grid.Column="0"
+            Width="300"
+            IsVisible="{Binding HasWorkspaces}"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+            BorderThickness="0,0,1,0">
+      <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Margin="8,6" Spacing="1">
+          <TextBlock Text="{Binding SelectedWorkspaceLabel}"
+                     FontSize="12"
+                     FontWeight="SemiBold"
+                     TextTrimming="CharacterEllipsis"
+                     ToolTip.Tip="{Binding SelectedWorkspaceTab.FilePath}" />
+          <TextBlock Text="Log files"
+                     FontSize="11"
+                     Opacity="0.6" />
+        </StackPanel>
+        <ListBox ItemsSource="{Binding WorkspaceFiles}"
+                 SelectedItem="{Binding SelectedWorkspaceFile, Mode=TwoWay}"
+                 PointerPressed="OnWorkspaceFileClicked"
+                 DoubleTapped="OnWorkspaceFileActivated"
+                 FontSize="12"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+          <!-- Own item metrics. The Fluent theme paints every ListBoxItem with
+               a #363636 background across the full row width, so next to the
+               #0F0E0E sidebar a short file name leaves a grey slab. Resting
+               rows go transparent; the theme's :pointerover and :selected
+               backgrounds still win (higher selector specificity) and the
+               bottom border keeps the rows readable. -->
+          <ListBox.Styles>
+            <Style Selector="ListBoxItem">
+              <Setter Property="Background" Value="Transparent" />
+              <Setter Property="Padding" Value="6,3" />
+              <Setter Property="HorizontalAlignment" Value="Stretch" />
+              <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+              <Setter Property="BorderThickness" Value="0,0,0,1" />
+              <Setter Property="BorderBrush" Value="#20808080" />
+            </Style>
+            <Style Selector="ListBoxItem /template/ Border">
+              <Setter Property="Background" Value="Transparent" />
+            </Style>
+          </ListBox.Styles>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="ws:WorkspaceFile">
+              <!-- Fixed column widths, no star and no width binding. A star
+                   column resolves against the item's content, and a binding to
+                   the scroll viewport varies with scrollbar state, so both let
+                   the row follow the longest file name. Hard widths cannot:
+                   160 + 56 + 62 + 2*5 = 288, which is the 300px sidebar minus
+                   the item's 6px padding on each side. -->
+              <Grid ColumnDefinitions="160,56,62" ColumnSpacing="5">
+                <TextBlock Grid.Column="0"
+                           Text="{Binding Name}"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding SizeText}"
+                           FontSize="10"
+                           Opacity="0.65"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding ModifiedText}"
+                           FontSize="10"
+                           Opacity="0.65"
+                           VerticalAlignment="Center" />
+                <ToolTip.Tip>
+                  <ToolTip>
+                    <StackPanel Spacing="2">
+                      <TextBlock Text="{Binding Path}" FontSize="11" />
+                      <TextBlock Text="{Binding LastModified}" FontSize="10" Opacity="0.7" />
+                    </StackPanel>
+                  </ToolTip>
+                </ToolTip.Tip>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <TextBlock DockPanel.Dock="Bottom"
+                   Margin="8,4"
+                   FontSize="10"
+                   Opacity="0.7"
+                   IsVisible="{Binding HasWorkspaceOverflow}"
+                   Text="{Binding WorkspaceOverflowCount, StringFormat=+{0} file lain tidak ditampilkan}" />
+      </DockPanel>
+    </Border>
+
+    <DockPanel Grid.Column="1" LastChildFill="True">
       <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
         <Menu Grid.Column="0">
           <MenuItem Header="_File">
@@ -76,7 +166,7 @@
       <!-- TabControl -->
       <TabControl x:Name="MainTabControl"
                   ItemsSource="{Binding Tabs}"
-                  SelectedItem="{Binding SelectedTab}"
+                  SelectedItem="{Binding SelectedTab, Mode=OneWay}"
                   HorizontalAlignment="Stretch"
                   VerticalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch"
@@ -90,15 +180,52 @@
         
         <TabControl.ContentTemplate>
           <DataTemplate x:DataType="vm:TabViewModel">
-            <Grid HorizontalAlignment="Stretch"
-                  VerticalAlignment="Stretch">
+            <!-- Folder tab: a single click previews a log inside it, a double
+                 click opens it as its own tab. Until something is previewed the
+                 tab shows the workspace summary. Log tab: log lines. -->
+            <Panel HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+              <StackPanel IsVisible="{Binding !ShowsLog}"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Spacing="6"
+                          MaxWidth="520">
+                <TextBlock Text="{Binding FileName}"
+                           FontSize="16"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding FilePath}"
+                           FontSize="11"
+                           Opacity="0.6"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="Klik file di sidebar kiri untuk melihat lognya di tab ini"
+                           FontSize="12"
+                           Opacity="0.7"
+                           TextAlignment="Center"
+                           Margin="0,6,0,0" />
+                <TextBlock Text="Klik 2x untuk membuka sebagai tab sendiri"
+                           FontSize="11"
+                           Opacity="0.55"
+                           TextAlignment="Center" />
+              </StackPanel>
+
+              <Grid HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    IsVisible="{Binding ShowsLog}">
               <ScrollViewer HorizontalScrollBarVisibility="Auto"
                             VerticalScrollBarVisibility="Auto"
                             HorizontalAlignment="Stretch"
                             VerticalAlignment="Stretch"
                             Name="TabLogScrollViewer">
-                <ItemsControl ItemsSource="{Binding LogEvents}"
+                <!-- MinWidth floors the log area at the window width. A
+                     ScrollViewer with an Auto horizontal scrollbar measures its
+                     content with unbounded width, so without this the log
+                     shrinks to the longest line. A line longer than the window
+                     still overflows and scrolls: MinWidth is only a floor. -->
+                <ItemsControl ItemsSource="{Binding LogSource.LogEvents}"
                               HorizontalAlignment="Stretch"
+                              MinWidth="{Binding $parent[ScrollViewer].Bounds.Width}"
                               Name="TabLogItemsControl">
                   <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -131,7 +258,8 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
               </ScrollViewer>
-            </Grid>
+              </Grid>
+            </Panel>
           </DataTemplate>
         </TabControl.ContentTemplate>
         
@@ -154,9 +282,9 @@
     </DockPanel>
 
     <!-- Global Loading Indicator Overlay (Centered in Window) -->
-    <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+    <Border Grid.Column="0" Grid.ColumnSpan="2" Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
             Opacity="0.85"
-            IsVisible="{Binding SelectedTab.IsLoading, FallbackValue=False}"
+            IsVisible="{Binding ActiveLogTab.IsLoading, FallbackValue=False}"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch">
       <StackPanel HorizontalAlignment="Center"
@@ -173,7 +301,7 @@
                      FontWeight="SemiBold"
                      TextAlignment="Center"
                      HorizontalAlignment="Center" />
-          <TextBlock Text="{Binding SelectedTab.FilePath}"
+          <TextBlock Text="{Binding ActiveLogTab.FilePath}"
                      FontSize="11"
                      Opacity="0.6"
                      MaxWidth="450"

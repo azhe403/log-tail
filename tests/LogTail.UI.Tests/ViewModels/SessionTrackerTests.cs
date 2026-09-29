@@ -84,4 +84,38 @@ public sealed class SessionTrackerTests : IDisposable
 
         _sessionStore.Load().ActiveFile.Should().Be("b.log");
     }
+
+    [Fact]
+    public void Change_WhenFolderTabOpen_PersistsFolderApartFromLogFiles()
+    {
+        using var sut = new SessionTracker(_sessionStore, _tabs, _selected) { IsEnabled = true };
+        var folderTab = new TabViewModel(@"C:\logs\app", isFolder: true);
+        _tabs.Add(folderTab);
+        _tabs.Add(new TabViewModel("a.log"));
+
+        _selected.OnNext(folderTab);
+
+        var state = _sessionStore.Load();
+        state.Files.Should().Equal("a.log");
+        state.WorkspaceFolders.Should().Equal(@"C:\logs\app");
+        state.ActiveFolder.Should().Be(@"C:\logs\app");
+        state.ActiveFile.Should().BeNull();
+    }
+
+    [Fact]
+    public void Change_WhenFolderTabClosed_RemovesItFromSavedWorkspaces()
+    {
+        using var sut = new SessionTracker(_sessionStore, _tabs, _selected) { IsEnabled = true };
+        var folderTab = new TabViewModel(@"C:\logs\app", isFolder: true);
+        _tabs.Add(folderTab);
+        _selected.OnNext(folderTab);
+        _sessionStore.Load().WorkspaceFolders.Should().Equal(@"C:\logs\app");
+
+        _tabs.Remove(folderTab);
+        _selected.OnNext(null);
+
+        var state = _sessionStore.Load();
+        state.WorkspaceFolders.Should().BeEmpty();
+        state.ActiveFolder.Should().BeNull();
+    }
 }

@@ -15,7 +15,9 @@ public static class LogFileValidator
     public static string? GetSupportedExtension(string path)
     {
         var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".log" or ".txt" ? ext : null;
+        // .jsonl joins .log and .txt: the workspace sidebar lists it, and a
+        // listed extension that cannot be restored is a trap for the user.
+        return ext is ".log" or ".txt" or ".jsonl" ? ext : null;
     }
 
     /// <summary>

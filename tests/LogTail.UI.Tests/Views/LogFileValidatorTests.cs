@@ -82,6 +82,21 @@ public class LogFileValidatorTests : IDisposable
         error.Should().BeNull();
     }
 
+    [Fact]
+    public void TryValidateFile_WhenValidJsonlFile_ReturnsTrue()
+    {
+        // The workspace sidebar lists .jsonl, so opening one has to be allowed,
+        // or the tab silently disappears on the next restore.
+        var path = Path.Combine(_tempDir, "access.jsonl");
+        File.WriteAllText(path, "{\"a\":1}\n");
+
+        var result = LogFileValidator.TryValidateFile(path, out var error);
+
+        result.Should().BeTrue();
+        error.Should().BeNull();
+        LogFileValidator.GetSupportedExtension(path).Should().Be(".jsonl");
+    }
+
     [Theory]
     [InlineData("test.log")]
     [InlineData("test.LOG")]

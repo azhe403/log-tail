@@ -80,10 +80,55 @@ public sealed class TabViewModel : ReactiveObject
         set => this.RaiseAndSetIfChanged(ref _isTailing, value);
     }
 
-    public TabViewModel(string filePath)
+    /// <summary>
+    /// True when this tab represents an open workspace folder instead of a
+    /// log file. Folder tabs hold a <see cref="Preview"/> when a file has been
+    /// picked from the sidebar, and never tail on their own account.
+    /// </summary>
+    public bool IsFolder { get; }
+
+    /// <summary>
+    /// The log file shown inside a folder tab, set by a single click in the
+    /// sidebar. Null means the tab shows its workspace summary.
+    /// </summary>
+    public TabViewModel? Preview { get; private set; }
+
+    public void SetPreview(TabViewModel? preview)
     {
+        Preview = preview;
+
+        // Both names matter: ShowsLog decides between the summary and the log
+        // view, LogSource is what the log view binds its ItemsSource to. Raising
+        // only ShowsLog leaves the view bound to the previous collection.
+        this.RaisePropertyChanged(nameof(ShowsLog));
+        this.RaisePropertyChanged(nameof(LogSource));
+    }
+
+    /// <summary>
+    /// The log view to render for this tab: the preview inside a folder tab,
+    /// otherwise the tab itself. A folder tab with no preview has no lines, so
+    /// binding here is harmless while <see cref="ShowsLog"/> is false.
+    /// </summary>
+    public TabViewModel LogSource => Preview ?? this;
+
+    /// <summary>
+    /// True when this tab shows log lines: a log tab always, a folder tab only
+    /// while a file is previewed inside it. The view uses it to pick between
+    /// the log view and the workspace summary.
+    /// </summary>
+    public bool ShowsLog => !IsFolder || Preview is not null;
+
+    public TabViewModel(string filePath, bool isFolder = false)
+    {
+        IsFolder = isFolder;
         FilePath = filePath;
-        FileName = System.IO.Path.GetFileName(filePath);
+        FileName = isFolder ? GetFolderLabel(filePath) : System.IO.Path.GetFileName(filePath);
+
+        if (isFolder)
+        {
+            // Nothing to stat: a folder has no size or modified time to report.
+            return;
+        }
 
         // Best-effort: populate initial size and modified time so the status
         // bar shows something useful before tailing starts. Swallow IO errors
@@ -107,6 +152,68 @@ public sealed class TabViewModel : ReactiveObject
         {
             // Same: skip.
         }
+    }
+
+    /// <summary>
+    /// Points this log tab at another file and clears the previous one's lines.
+    /// A log tab is a viewer slot rather than a pinned file: a single click in
+    /// the workspace sidebar retargets the tab that is on screen.
+    /// </summary>
+    public void LoadFile(string filePath)
+    {
+        FilePath = filePath;
+        FileName = IsFolder
+            ? GetFolderLabel(filePath)
+            : System.IO.Path.GetFileName(filePath);
+
+        LogEvents.Clear();
+        _totalLinesAppended = 0;
+        LineCount = 0;
+        LinesPerSecond = 0;
+        FileSize = 0;
+        LastModified = default;
+        Status = "Idle";
+
+        // Best-effort, same as the constructor: a stat failure must not stop
+        // the tailing source from opening the file a moment later.
+        try
+        {
+            var info = new System.IO.FileInfo(filePath);
+            if (info.Exists)
+            {
+                FileSize = info.Length;
+                LastModified = info.LastWriteTime;
+            }
+        }
+        catch (System.IO.IOException)
+        {
+        }
+        catch (System.UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Display label for a folder tab: the folder name plus its parent, so two
+    /// workspaces called "app" (say <c>logs\app</c> and <c>archive\app</c>) can
+    /// be told apart in the tab strip, the sidebar and the status bar. A folder
+    /// at a filesystem root has no parent to show, so it keeps its own path.
+    /// </summary>
+    private static string GetFolderLabel(string folderPath)
+    {
+        var trimmed = folderPath.TrimEnd(
+            System.IO.Path.DirectorySeparatorChar,
+            System.IO.Path.AltDirectorySeparatorChar);
+        var name = System.IO.Path.GetFileName(trimmed);
+
+        if (string.IsNullOrEmpty(name))
+        {
+            return folderPath;
+        }
+
+        // Purely path-based: no filesystem call, so this cannot fail or block.
+        var parent = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(trimmed));
+        return string.IsNullOrEmpty(parent) ? name : $"{name} ({parent})";
     }
 
     public void AddLogEvent(EnrichedLogEvent logEvent)
