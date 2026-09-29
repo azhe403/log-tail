@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon/logtail-256.png" alt="LogTail" width="128" />
+</p>
+
 # LogTail
 
 A lightweight, cross-platform desktop log viewer and real-time log monitoring tool built with Avalonia UI and .NET 10.

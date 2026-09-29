@@ -10,6 +10,7 @@
                     x:Class="LogTail.UI.Views.MainWindow"
                     x:DataType="vm:MainWindowViewModel"
                     Title="{Binding WindowTitle}"
+                    Icon="/Assets/Icon.png"
                     Width="900"
                     Height="600"
                      DragDrop.AllowDrop="True">

@@ -8,6 +8,7 @@
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\icon\logtail.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
@@ -19,6 +20,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LogTail.Core\LogTail.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    The icon lives once under assets/ at the repo root, shared by the branding assets
+    and the application. Link it into the assembly so Avalonia can resolve /Assets/Icon.png.
+  -->
+  <ItemGroup>
+    <AvaloniaResource Include="..\..\assets\icon\logtail-256.png" Link="Assets\Icon.png" />
   </ItemGroup>
 
   <ItemGroup>
