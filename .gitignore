@@ -64,3 +64,6 @@ coverage*/
 *.tmp
 
 .omo
+
+## Superpowers brainstorming scratch (mockups served by the visual companion)
+.superpowers/
