@@ -77,7 +77,7 @@ public partial class App : Application
             settingsViewModel.RestoreLastSessionChanged += enabled => tracker.IsEnabled = enabled;
             desktop.Exit += (_, _) => tracker.Dispose();
 
-            var mainWindow = new MainWindow
+            var mainWindow = new MainWindow(settings, logger)
             {
                 DataContext = viewModel
             };

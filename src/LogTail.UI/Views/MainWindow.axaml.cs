@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -14,7 +15,9 @@ using System.IO;
 using Avalonia.ReactiveUI;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using LogTail.Core.Logging;
 using LogTail.Core.Models;
+using LogTail.Core.Persistence;
 using LogTail.Core.Workspace;
 using LogTail.UI.ViewModels;
 using ReactiveUI;
@@ -23,15 +26,82 @@ namespace LogTail.UI.Views;
 
 public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
 {
+    private readonly SettingsStore? _settingsStore;
+    private readonly ILogTailLogger? _logger;
+    private readonly Subject<WindowPlacement> _savePlacementSubject = new();
+    private PixelPoint? _lastNormalPosition;
+    private double? _lastNormalWidth;
+    private double? _lastNormalHeight;
+    private bool _isRestoringPlacement;
+
     private ScrollViewer? _scrollViewer;
     private bool _isProgrammaticScroll;
     private bool _scrollRequested;
     private IDisposable? _activeTabListener;
     private bool _suppressOffsetEvents;
 
-    public MainWindow()
+    public MainWindow() : this(null, null)
     {
+    }
+
+    public MainWindow(SettingsStore? settingsStore, ILogTailLogger? logger = null)
+    {
+        _settingsStore = settingsStore;
+        _logger = logger;
+
         InitializeComponent();
+
+        _isRestoringPlacement = true;
+        try
+        {
+            RestoreWindowPlacement();
+        }
+        finally
+        {
+            _isRestoringPlacement = false;
+        }
+
+        _savePlacementSubject
+            .Throttle(TimeSpan.FromMilliseconds(200))
+            .Subscribe(placement =>
+            {
+                try
+                {
+                    _settingsStore?.Update(s => s with { WindowPlacement = placement });
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn($"Failed to save window placement: {ex.Message}");
+                }
+            });
+
+        PositionChanged += (_, _) => NotifyPositionChanged(Position);
+
+        SizeChanged += (_, e) =>
+        {
+            if (!_isRestoringPlacement && WindowState == WindowState.Normal)
+            {
+                var w = e.NewSize.Width >= 100 ? e.NewSize.Width : GetActualWidth();
+                var h = e.NewSize.Height >= 100 ? e.NewSize.Height : GetActualHeight();
+                _lastNormalWidth = w;
+                _lastNormalHeight = h;
+                QueueSavePlacement();
+            }
+        };
+
+        PropertyChanged += (_, e) =>
+        {
+            if (!_isRestoringPlacement && e.Property == WindowStateProperty)
+            {
+                QueueSavePlacement();
+            }
+        };
+
+        Closing += (_, _) =>
+        {
+            _savePlacementSubject.Dispose();
+            SaveWindowPlacement();
+        };
 
         // DragDrop handlers for dropping files from OS file manager
         AddHandler(DragDrop.DropEvent, OnDrop);
@@ -404,5 +474,149 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         data.Add(DataTransferItem.CreateText(payload));
 
         await DragDrop.DoDragDropAsync(e, data, DragDropEffects.Copy);
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        if (_settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = _settingsStore.Load();
+            var placement = settings.WindowPlacement;
+            if (placement is null)
+            {
+                return;
+            }
+
+            if (placement.Width.HasValue && placement.Width.Value >= 100)
+            {
+                Width = placement.Width.Value;
+                _lastNormalWidth = placement.Width.Value;
+            }
+
+            if (placement.Height.HasValue && placement.Height.Value >= 100)
+            {
+                Height = placement.Height.Value;
+                _lastNormalHeight = placement.Height.Value;
+            }
+
+            if (placement.X.HasValue && placement.Y.HasValue)
+            {
+                var targetPoint = new PixelPoint(placement.X.Value, placement.Y.Value);
+                _lastNormalPosition = targetPoint;
+
+                var isVisibleOnScreen = true;
+                if (Screens is { All.Count: > 0 })
+                {
+                    isVisibleOnScreen = Screens.ScreenFromPoint(targetPoint) != null;
+                }
+
+                if (isVisibleOnScreen)
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual;
+                    Position = targetPoint;
+                }
+            }
+
+            if (placement.IsMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Failed to restore window placement: {ex.Message}");
+        }
+    }
+
+    internal void NotifyPositionChanged(PixelPoint pos)
+    {
+        if (!_isRestoringPlacement && WindowState == WindowState.Normal)
+        {
+            _lastNormalPosition = pos;
+            QueueSavePlacement();
+        }
+    }
+
+    private void QueueSavePlacement()
+    {
+        if (_isRestoringPlacement || _settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var isMaximized = WindowState == WindowState.Maximized;
+            var pos = _lastNormalPosition ?? Position;
+            var currentWidth = GetActualWidth();
+            var currentHeight = GetActualHeight();
+            var width = isMaximized ? _lastNormalWidth ?? currentWidth : currentWidth;
+            var height = isMaximized ? _lastNormalHeight ?? currentHeight : currentHeight;
+
+            var placement = new WindowPlacement(
+                X: pos.X,
+                Y: pos.Y,
+                Width: width,
+                Height: height,
+                IsMaximized: isMaximized);
+
+            _savePlacementSubject.OnNext(placement);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Failed to capture window placement: {ex.Message}");
+        }
+    }
+
+    private double GetActualWidth()
+    {
+        if (!double.IsNaN(Width) && Width >= 100) return Width;
+        if (ClientSize.Width >= 100) return ClientSize.Width;
+        if (Bounds.Width >= 100) return Bounds.Width;
+        return 900;
+    }
+
+    private double GetActualHeight()
+    {
+        if (!double.IsNaN(Height) && Height >= 100) return Height;
+        if (ClientSize.Height >= 100) return ClientSize.Height;
+        if (Bounds.Height >= 100) return Bounds.Height;
+        return 600;
+    }
+
+    private void SaveWindowPlacement()
+    {
+        if (_settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var isMaximized = WindowState == WindowState.Maximized;
+            var pos = _lastNormalPosition ?? Position;
+            var currentWidth = GetActualWidth();
+            var currentHeight = GetActualHeight();
+            var width = isMaximized ? _lastNormalWidth ?? currentWidth : currentWidth;
+            var height = isMaximized ? _lastNormalHeight ?? currentHeight : currentHeight;
+
+            var placement = new WindowPlacement(
+                X: pos.X,
+                Y: pos.Y,
+                Width: width,
+                Height: height,
+                IsMaximized: isMaximized);
+
+            _settingsStore.Update(s => s with { WindowPlacement = placement });
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Failed to save window placement: {ex.Message}");
+        }
     }
 }

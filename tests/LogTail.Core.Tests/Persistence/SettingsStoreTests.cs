@@ -117,4 +117,22 @@ public sealed class SettingsStoreTests : IDisposable
 
         sut.Load().RestoreLastSession.Should().BeFalse();
     }
+
+    [Fact]
+    public void Save_WhenWindowPlacementConfigured_RoundtripsSuccessfully()
+    {
+        var sut = new SettingsStore(_tempDir);
+        var placement = new WindowPlacement(
+            X: 120,
+            Y: 240,
+            Width: 1024,
+            Height: 768,
+            IsMaximized: true);
+
+        sut.Save(new AppSettings(WindowPlacement: placement));
+
+        var loaded = sut.Load();
+
+        loaded.WindowPlacement.Should().Be(placement);
+    }
 }

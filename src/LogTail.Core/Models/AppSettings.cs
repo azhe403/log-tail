@@ -1,5 +1,12 @@
 namespace LogTail.Core.Models;
 
+public sealed record WindowPlacement(
+    int? X = null,
+    int? Y = null,
+    double? Width = null,
+    double? Height = null,
+    bool IsMaximized = false);
+
 public sealed record AppSettings(
     ThemeMode Theme = ThemeMode.System,
     int BufferCapacity = 50_000,
@@ -9,4 +16,5 @@ public sealed record AppSettings(
     int TailLineLimit = 50_000,
     int InitialWindowBytes = 8 * 1024 * 1024,
     int MaxWindowBytes = 64 * 1024 * 1024,
-    bool RestoreLastSession = true);
+    bool RestoreLastSession = true,
+    WindowPlacement? WindowPlacement = null);
