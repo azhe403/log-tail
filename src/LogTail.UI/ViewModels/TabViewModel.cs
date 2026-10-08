@@ -1,4 +1,5 @@
 using LogTail.Core.Models;
+using LogTail.Core.Workspace;
 using LogTail.UI.Collections;
 using ReactiveUI;
 
@@ -16,6 +17,20 @@ public sealed class TabViewModel : ReactiveObject
     private DateTime _lastModified;
     private double _linesPerSecond;
     private bool _isTailing;
+
+    private WorkspaceSortCriterion _workspaceSortCriterion = WorkspaceSortCriterion.Name;
+    public WorkspaceSortCriterion WorkspaceSortCriterion
+    {
+        get => _workspaceSortCriterion;
+        set => this.RaiseAndSetIfChanged(ref _workspaceSortCriterion, value);
+    }
+
+    private WorkspaceSortDirection _workspaceSortDirection = WorkspaceSortDirection.Ascending;
+    public WorkspaceSortDirection WorkspaceSortDirection
+    {
+        get => _workspaceSortDirection;
+        set => this.RaiseAndSetIfChanged(ref _workspaceSortDirection, value);
+    }
 
     public string FileName
     {

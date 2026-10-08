@@ -75,7 +75,17 @@ public partial class App : Application
 
             tracker.IsEnabled = settingsViewModel.RestoreLastSession;
             settingsViewModel.RestoreLastSessionChanged += enabled => tracker.IsEnabled = enabled;
-            desktop.Exit += (_, _) => tracker.Dispose();
+
+            // Sort toggles change TabViewModel state, not the Tabs collection, so
+            // without this hook the new sort reaches session.json only on the next
+            // tab switch — a crash before then loses it. Each toggle writes
+            // immediately while the tracker is enabled.
+            viewModel.WorkspaceSortChanged += tracker.SaveNow;
+            desktop.Exit += (_, _) =>
+            {
+                viewModel.WorkspaceSortChanged -= tracker.SaveNow;
+                tracker.Dispose();
+            };
 
             var mainWindow = new MainWindow(settings, logger)
             {
@@ -129,6 +139,7 @@ public partial class App : Application
         if (session.WorkspaceFolders is { Count: > 0 })
         {
             viewModel.RestoreWorkspaces(session.WorkspaceFolders);
+            ApplyWorkspaceSorts(viewModel, session.WorkspaceSorts);
         }
 
         var valid = new List<string>();
@@ -172,6 +183,33 @@ public partial class App : Application
         if (missing.Count > 0)
         {
             viewModel.StatusMessage = $"{missing.Count} file dari sesi terakhir tidak ditemukan";
+        }
+    }
+
+    /// <summary>
+    /// Puts each folder tab's saved sort back before the first scan lands, so the
+    /// sidebar comes up in the order the user left it. Matched by path because
+    /// RestoreWorkspaces has already normalized the paths.
+    /// </summary>
+    private static void ApplyWorkspaceSorts(
+        MainWindowViewModel viewModel,
+        IReadOnlyList<WorkspaceSortState>? sorts)
+    {
+        if (sorts is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var tab in viewModel.Tabs.Where(t => t.IsFolder))
+        {
+            var saved = sorts.FirstOrDefault(s =>
+                string.Equals(s.FolderPath, tab.FilePath, StringComparison.OrdinalIgnoreCase));
+
+            if (saved is not null)
+            {
+                tab.WorkspaceSortCriterion = saved.Criterion;
+                tab.WorkspaceSortDirection = saved.Direction;
+            }
         }
     }
 

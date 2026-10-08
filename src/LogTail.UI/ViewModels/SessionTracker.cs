@@ -63,11 +63,16 @@ public sealed class SessionTracker : IDisposable
         // would come back as a "missing file" on the next restore.
         var files = new List<string>();
         var folders = new List<string>();
+        var sorts = new List<WorkspaceSortState>();
         foreach (var tab in _tabs)
         {
             if (tab.IsFolder)
             {
                 AddIfMissing(folders, tab.FilePath);
+                sorts.Add(new WorkspaceSortState(
+                    tab.FilePath,
+                    tab.WorkspaceSortCriterion,
+                    tab.WorkspaceSortDirection));
             }
             else
             {
@@ -84,7 +89,7 @@ public sealed class SessionTracker : IDisposable
         var activeFile = selected is { IsFolder: false } ? selected.FilePath : null;
         var activeFolder = selected is { IsFolder: true } ? selected.FilePath : null;
 
-        _store.Save(new SessionState(files, activeFile, folders, activeFolder));
+        _store.Save(new SessionState(files, activeFile, folders, activeFolder, sorts));
     }
 
     public void Dispose()

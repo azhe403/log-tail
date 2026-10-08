@@ -6,7 +6,12 @@ using Avalonia.Threading;
 using FluentAssertions;
 using LogTail.Core.Models;
 using LogTail.Core.Sources;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.VisualTree;
+using LogTail.Core.Workspace;
 using LogTail.UI.ViewModels;
+using LogTail.UI.Views;
 using Xunit;
 
 namespace LogTail.UI.Tests;
@@ -982,6 +987,150 @@ public sealed class MainWindowViewModelTests : IDisposable
         PumpUntil(() => sut.StatusMessage.StartsWith("Workspace:", StringComparison.Ordinal));
         sut.WorkspaceFiles.Should().BeEmpty();
         sut.StatusMessage.Should().NotContain("not found");
+    }
+
+    [AvaloniaFact]
+    public void ToggleWorkspaceSort_SortsFilesAndUpdatesLabels()
+    {
+        var sut = CreateViewModel();
+        var folder = Path.Combine(_tempDir, "ws-sort-test");
+        Directory.CreateDirectory(folder);
+        var file1 = Path.Combine(folder, "b.log");
+        var file2 = Path.Combine(folder, "a.log");
+        File.WriteAllText(file1, "1234567890\n"); // 11 bytes
+        File.WriteAllText(file2, "1\n"); // 2 bytes
+        File.SetLastWriteTime(file1, DateTime.Now.AddHours(-1));
+        File.SetLastWriteTime(file2, DateTime.Now);
+
+        sut.OpenFolderTab(folder);
+        PumpUntil(() => sut.WorkspaceFiles.Count >= 2);
+
+        // Initial default: Name Ascending
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Name);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Ascending);
+        sut.WorkspaceSortNameLabel.Should().Be("Name ↑");
+        sut.WorkspaceFiles[0].Name.Should().Be("a.log");
+
+        // Toggle Name -> Descending
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Name);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
+        sut.WorkspaceSortNameLabel.Should().Be("Name ↓");
+        sut.WorkspaceFiles[0].Name.Should().Be("b.log");
+
+        // Switch to Size -> Defaults to Descending (largest first)
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
+        sut.WorkspaceSortSizeLabel.Should().Be("Size ↓");
+        sut.WorkspaceFiles[0].Name.Should().Be("b.log");
+
+        // Toggle Size -> Ascending (smallest first)
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Ascending);
+        sut.WorkspaceSortSizeLabel.Should().Be("Size ↑");
+        sut.WorkspaceFiles[0].Name.Should().Be("a.log");
+
+        // Switch to Date -> Defaults to Descending (newest first)
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Date);
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Date);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
+        sut.WorkspaceSortDateLabel.Should().Be("Date ↓");
+        sut.WorkspaceFiles[0].Name.Should().Be("a.log");
+
+        // Toggle Date -> Ascending (oldest first)
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Date);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Ascending);
+        sut.WorkspaceSortDateLabel.Should().Be("Date ↑");
+        sut.WorkspaceFiles[0].Name.Should().Be("b.log");
+    }
+
+    [AvaloniaFact]
+    public void SortCommand_ExecutesToggleWorkspaceSort()
+    {
+        // The sidebar buttons bind Command="{Binding SortCommand}", so exercising
+        // the command is exercising the button path — no window needed.
+        var sut = CreateViewModel();
+        var folder = Path.Combine(_tempDir, "ws-cmd-sort");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "b.log"), "12345\n");
+        File.WriteAllText(Path.Combine(folder, "a.log"), "1\n");
+
+        sut.OpenFolderTab(folder);
+        PumpUntil(() => sut.WorkspaceFiles.Count >= 2);
+
+        sut.SortCommand.Execute(WorkspaceSortCriterion.Size).Subscribe();
+
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
+        sut.WorkspaceFiles[0].Name.Should().Be("b.log");
+    }
+
+    [AvaloniaFact]
+    public void SortCommand_RaisesWorkspaceSortChanged()
+    {
+        // SessionTracker hooks this event for immediate session.json writes, so
+        // a crash right after sorting still restores the order.
+        var sut = CreateViewModel();
+        sut.OpenFolderTab(CreateWorkspace("ws-cmd-event"));
+
+        var fired = 0;
+        sut.WorkspaceSortChanged += () => fired++;
+
+        sut.SortCommand.Execute(WorkspaceSortCriterion.Date).Subscribe();
+
+        fired.Should().Be(1);
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_LoadsWithSortButtonsBound()
+    {
+        // Guards the sidebar XAML (Command + CommandParameter bindings).
+        // Compiled bindings fail at load time, so just loading the view with a
+        // workspace open proves the wiring resolves.
+        Splat.Locator.CurrentMutable.Register(
+            () => new Avalonia.ReactiveUI.AvaloniaActivationForViewFetcher(),
+            typeof(ReactiveUI.IActivationForViewFetcher));
+
+        var vm = CreateViewModel();
+        vm.OpenFolderTab(CreateWorkspace("ws-xaml-sort"));
+        PumpUntil(() => vm.WorkspaceFiles.Count > 0);
+
+        var window = new MainWindow { DataContext = vm };
+        window.Content.Should().NotBeNull();
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void WorkspaceSort_IsRememberedPerWorkspace()
+    {
+        var sut = CreateViewModel();
+        var folder1 = Path.Combine(_tempDir, "ws-sort-mem-1");
+        var folder2 = Path.Combine(_tempDir, "ws-sort-mem-2");
+        Directory.CreateDirectory(folder1);
+        Directory.CreateDirectory(folder2);
+        File.WriteAllText(Path.Combine(folder1, "x.log"), "1");
+        File.WriteAllText(Path.Combine(folder2, "y.log"), "1");
+
+        sut.OpenFolderTab(folder1);
+        PumpUntil(() => sut.SelectedWorkspaceTab?.FilePath == folder1);
+
+        // Change folder1 to Size Descending
+        sut.ToggleWorkspaceSort(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
+
+        // Open folder2 -> Should have default Name Ascending
+        sut.OpenFolderTab(folder2);
+        PumpUntil(() => sut.SelectedWorkspaceTab?.FilePath == folder2);
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Name);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Ascending);
+
+        // Switch back to folder1 -> Should restore Size Descending
+        sut.SelectedTab = sut.Tabs[0];
+        PumpUntil(() => sut.SelectedWorkspaceTab?.FilePath == folder1);
+        sut.WorkspaceSortCriterion.Should().Be(WorkspaceSortCriterion.Size);
+        sut.WorkspaceSortDirection.Should().Be(WorkspaceSortDirection.Descending);
     }
 
     /// <summary>

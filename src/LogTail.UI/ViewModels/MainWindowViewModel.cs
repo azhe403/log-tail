@@ -96,6 +96,88 @@ public sealed class MainWindowViewModel : ReactiveObject
     public ObservableCollection<WorkspaceFile> WorkspaceFiles { get; } = new();
     public bool HasWorkspaces => WorkspaceTabs.Count > 0;
 
+    public WorkspaceSortCriterion WorkspaceSortCriterion =>
+        SelectedWorkspaceTab?.WorkspaceSortCriterion ?? WorkspaceSortCriterion.Name;
+
+    public WorkspaceSortDirection WorkspaceSortDirection =>
+        SelectedWorkspaceTab?.WorkspaceSortDirection ?? WorkspaceSortDirection.Ascending;
+
+    public bool IsWorkspaceSortNameActive => WorkspaceSortCriterion == WorkspaceSortCriterion.Name;
+    public bool IsWorkspaceSortSizeActive => WorkspaceSortCriterion == WorkspaceSortCriterion.Size;
+    public bool IsWorkspaceSortDateActive => WorkspaceSortCriterion == WorkspaceSortCriterion.Date;
+
+    public string WorkspaceSortNameLabel =>
+        IsWorkspaceSortNameActive ? (WorkspaceSortDirection == WorkspaceSortDirection.Ascending ? "Name ↑" : "Name ↓") : "Name";
+
+    public string WorkspaceSortSizeLabel =>
+        IsWorkspaceSortSizeActive ? (WorkspaceSortDirection == WorkspaceSortDirection.Ascending ? "Size ↑" : "Size ↓") : "Size";
+
+    public string WorkspaceSortDateLabel =>
+        IsWorkspaceSortDateActive ? (WorkspaceSortDirection == WorkspaceSortDirection.Ascending ? "Date ↑" : "Date ↓") : "Date";
+
+    private void NotifyWorkspaceSortChanged()
+    {
+        this.RaisePropertyChanged(nameof(WorkspaceSortCriterion));
+        this.RaisePropertyChanged(nameof(WorkspaceSortDirection));
+        this.RaisePropertyChanged(nameof(WorkspaceSortNameLabel));
+        this.RaisePropertyChanged(nameof(WorkspaceSortSizeLabel));
+        this.RaisePropertyChanged(nameof(WorkspaceSortDateLabel));
+        this.RaisePropertyChanged(nameof(IsWorkspaceSortNameActive));
+        this.RaisePropertyChanged(nameof(IsWorkspaceSortSizeActive));
+        this.RaisePropertyChanged(nameof(IsWorkspaceSortDateActive));
+    }
+
+    public event Action? WorkspaceSortChanged;
+
+    public void ToggleWorkspaceSort(WorkspaceSortCriterion criterion)
+    {
+        var folder = SelectedWorkspaceTab;
+        if (folder is null)
+        {
+            return;
+        }
+
+        if (folder.WorkspaceSortCriterion == criterion)
+        {
+            folder.WorkspaceSortDirection = folder.WorkspaceSortDirection == WorkspaceSortDirection.Ascending
+                ? WorkspaceSortDirection.Descending
+                : WorkspaceSortDirection.Ascending;
+        }
+        else
+        {
+            folder.WorkspaceSortCriterion = criterion;
+            // Defaults: Name -> Asc (A-Z), Size -> Desc (largest first), Date -> Desc (newest first)
+            folder.WorkspaceSortDirection = criterion == WorkspaceSortCriterion.Name
+                ? WorkspaceSortDirection.Ascending
+                : WorkspaceSortDirection.Descending;
+        }
+
+        NotifyWorkspaceSortChanged();
+        ApplyWorkspaceSort();
+        WorkspaceSortChanged?.Invoke();
+    }
+
+    private void ApplyWorkspaceSort()
+    {
+        if (WorkspaceFiles.Count <= 1)
+        {
+            return;
+        }
+
+        var sorted = WorkspaceFileScanner.OrderFiles(WorkspaceFiles, WorkspaceSortCriterion, WorkspaceSortDirection).ToList();
+        var selected = _selectedWorkspaceFile;
+        WorkspaceFiles.Clear();
+        foreach (var file in sorted)
+        {
+            WorkspaceFiles.Add(file);
+        }
+
+        if (selected is not null)
+        {
+            this.RaisePropertyChanged(nameof(SelectedWorkspaceFile));
+        }
+    }
+
     private int _workspaceOverflowCount;
 
     /// <summary>How many log files the last scan found beyond the 1000 it shows.</summary>
@@ -137,6 +219,7 @@ public sealed class MainWindowViewModel : ReactiveObject
         {
             this.RaiseAndSetIfChanged(ref _selectedWorkspaceTab, value);
             this.RaisePropertyChanged(nameof(SelectedWorkspaceLabel));
+            NotifyWorkspaceSortChanged();
         }
     }
 
@@ -247,8 +330,9 @@ public sealed class MainWindowViewModel : ReactiveObject
                     _scannedFolder = root;
                     WorkspaceOverflowCount = result.Overflow;
                     var selected = _selectedWorkspaceFile;
+                    var ordered = WorkspaceFileScanner.OrderFiles(result.Files, WorkspaceSortCriterion, WorkspaceSortDirection);
                     WorkspaceFiles.Clear();
-                    foreach (var file in result.Files)
+                    foreach (var file in ordered)
                     {
                         WorkspaceFiles.Add(file);
                     }
@@ -355,6 +439,7 @@ public sealed class MainWindowViewModel : ReactiveObject
     public ReactiveCommand<Unit, Unit> ClearCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     public ReactiveCommand<TabViewModel, Unit> CloseTabCommand { get; }
+    public ReactiveCommand<WorkspaceSortCriterion, Unit> SortCommand { get; }
     public SettingsViewModel Settings { get; }
 
     private readonly ObservableAsPropertyHelper<bool> _isTailing;
@@ -411,6 +496,7 @@ public sealed class MainWindowViewModel : ReactiveObject
         OpenFileCommand = ReactiveCommand.CreateFromTask(OpenFileAsync);
         ClearCommand = ReactiveCommand.Create(Clear);
         CloseTabCommand = ReactiveCommand.Create<TabViewModel>(CloseTab);
+        SortCommand = ReactiveCommand.Create<WorkspaceSortCriterion>(ToggleWorkspaceSort);
         OpenSettingsCommand = ReactiveCommand.CreateFromTask(
             async () => await ShowSettingsDialog.Handle(Unit.Default));
 

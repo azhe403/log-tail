@@ -4,6 +4,19 @@ using System.Linq;
 
 namespace LogTail.Core.Workspace;
 
+public enum WorkspaceSortCriterion
+{
+    Name,
+    Size,
+    Date,
+}
+
+public enum WorkspaceSortDirection
+{
+    Ascending,
+    Descending,
+}
+
 /// <summary>
 /// One log file inside a workspace folder, with the two facts the sidebar shows
 /// next to the name: how big it is and when it was last written.
@@ -49,6 +62,27 @@ public static class WorkspaceFileScanner
     public const int MaxDepth = 64;
 
     private static readonly string[] LogExtensions = [".log", ".txt", ".jsonl"];
+
+    /// <summary>
+    /// Sorts a sequence of <see cref="WorkspaceFile"/> according to the criterion and direction.
+    /// </summary>
+    public static IEnumerable<WorkspaceFile> OrderFiles(
+        IEnumerable<WorkspaceFile> files,
+        WorkspaceSortCriterion criterion,
+        WorkspaceSortDirection direction) =>
+        criterion switch
+        {
+            WorkspaceSortCriterion.Name => direction == WorkspaceSortDirection.Ascending
+                ? files.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ThenBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
+                : files.OrderByDescending(f => f.Name, StringComparer.OrdinalIgnoreCase).ThenByDescending(f => f.Path, StringComparer.OrdinalIgnoreCase),
+            WorkspaceSortCriterion.Size => direction == WorkspaceSortDirection.Ascending
+                ? files.OrderBy(f => f.Size).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                : files.OrderByDescending(f => f.Size).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase),
+            WorkspaceSortCriterion.Date => direction == WorkspaceSortDirection.Ascending
+                ? files.OrderBy(f => f.LastModified).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                : files.OrderByDescending(f => f.LastModified).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase),
+            _ => files,
+        };
 
     /// <summary>
     /// Scans <paramref name="root"/> for log files, sorted by name.

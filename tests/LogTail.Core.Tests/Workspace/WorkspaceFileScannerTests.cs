@@ -164,6 +164,58 @@ public sealed class WorkspaceFileScannerTests : IDisposable
         WorkspaceFile.FormatSize(3L * 1024 * 1024 * 1024).Should().Be("3 GB");
     }
 
+    [Fact]
+    public void OrderFiles_SortsByNameAscendingAndDescending()
+    {
+        var files = new[]
+        {
+            new WorkspaceFile("c.log", "c.log", 100, DateTime.Now),
+            new WorkspaceFile("a.log", "a.log", 200, DateTime.Now),
+            new WorkspaceFile("b.log", "b.log", 300, DateTime.Now),
+        };
+
+        var asc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Name, WorkspaceSortDirection.Ascending);
+        asc.Select(f => f.Name).Should().Equal("a.log", "b.log", "c.log");
+
+        var desc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Name, WorkspaceSortDirection.Descending);
+        desc.Select(f => f.Name).Should().Equal("c.log", "b.log", "a.log");
+    }
+
+    [Fact]
+    public void OrderFiles_SortsBySizeAscendingAndDescending()
+    {
+        var files = new[]
+        {
+            new WorkspaceFile("small.log", "small.log", 10, DateTime.Now),
+            new WorkspaceFile("large.log", "large.log", 1000, DateTime.Now),
+            new WorkspaceFile("medium.log", "medium.log", 100, DateTime.Now),
+        };
+
+        var asc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Size, WorkspaceSortDirection.Ascending);
+        asc.Select(f => f.Name).Should().Equal("small.log", "medium.log", "large.log");
+
+        var desc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Size, WorkspaceSortDirection.Descending);
+        desc.Select(f => f.Name).Should().Equal("large.log", "medium.log", "small.log");
+    }
+
+    [Fact]
+    public void OrderFiles_SortsByDateAscendingAndDescending()
+    {
+        var now = DateTime.UtcNow;
+        var files = new[]
+        {
+            new WorkspaceFile("old.log", "old.log", 100, now.AddHours(-2)),
+            new WorkspaceFile("newest.log", "newest.log", 100, now),
+            new WorkspaceFile("mid.log", "mid.log", 100, now.AddHours(-1)),
+        };
+
+        var asc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Date, WorkspaceSortDirection.Ascending);
+        asc.Select(f => f.Name).Should().Equal("old.log", "mid.log", "newest.log");
+
+        var desc = WorkspaceFileScanner.OrderFiles(files, WorkspaceSortCriterion.Date, WorkspaceSortDirection.Descending);
+        desc.Select(f => f.Name).Should().Equal("newest.log", "mid.log", "old.log");
+    }
+
     private string WriteFile(params string[] segments)
     {
         var path = Path.Combine(new[] { _root }.Concat(segments).ToArray());
