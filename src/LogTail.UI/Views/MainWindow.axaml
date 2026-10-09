@@ -277,14 +277,22 @@
                             Margin="0"
                             MinHeight="20"
                             VerticalAlignment="Center">
-                        <TextBlock Grid.Column="0"
-                                   Text="{Binding LineNumber, StringFormat={}{0}.}"
-                                   Width="55"
-                                   TextAlignment="Right"
-                                   Margin="6,1,10,1"
-                                   Opacity="0.5"
-                                   FontFamily="Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,monospace"
-                                   FontSize="12" />
+                        <Border Grid.Column="0"
+                                Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                                BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,0,1,0"
+                                ZIndex="1">
+                          <Border.RenderTransform>
+                            <TranslateTransform X="{Binding $parent[ScrollViewer].Offset.X}" />
+                          </Border.RenderTransform>
+                          <TextBlock Text="{Binding LineNumber, StringFormat={}{0}.}"
+                                     Width="55"
+                                     TextAlignment="Right"
+                                     Margin="6,1,10,1"
+                                     Opacity="0.5"
+                                     FontFamily="Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,monospace"
+                                     FontSize="12" />
+                        </Border>
                         <TextBlock Grid.Column="1"
                                    Text="{Binding Raw.Line}"
                                    Margin="0,1,10,1"

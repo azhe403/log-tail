@@ -293,7 +293,11 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         {
             var scrollViewer = this.FindControl<TabControl>("MainTabControl")?
                 .FindDescendantOfType<ScrollViewer>();
-            scrollViewer?.ScrollToEnd();
+            if (scrollViewer != null)
+            {
+                var maxOffsetY = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
+                scrollViewer.Offset = new Vector(scrollViewer.Offset.X, maxOffsetY);
+            }
         }
         finally
         {
