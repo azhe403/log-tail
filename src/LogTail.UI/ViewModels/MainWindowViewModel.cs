@@ -8,6 +8,8 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using LogTail.Core.Buffer;
 using LogTail.Core.Logging;
@@ -95,6 +97,32 @@ public sealed class MainWindowViewModel : ReactiveObject
     // inside it. ponytail: one watcher, not one per tab.
     public ObservableCollection<WorkspaceFile> WorkspaceFiles { get; } = new();
     public bool HasWorkspaces => WorkspaceTabs.Count > 0;
+
+    public bool IsSidebarOnRight => Settings.SidebarPosition == SidebarPosition.Right;
+
+    public int SidebarColumn => IsSidebarOnRight ? 1 : 0;
+
+    public int ContentColumn => IsSidebarOnRight ? 0 : 1;
+
+    public Dock SidebarDock => IsSidebarOnRight ? Dock.Right : Dock.Left;
+
+    public Thickness SidebarBorderThickness => IsSidebarOnRight
+        ? new Thickness(1, 0, 0, 0)
+        : new Thickness(0, 0, 1, 0);
+
+    public string SidebarHintText => IsSidebarOnRight
+        ? "Klik file di sidebar kanan untuk melihat lognya di tab ini"
+        : "Klik file di sidebar kiri untuk melihat lognya di tab ini";
+
+    private void NotifySidebarPositionChanged()
+    {
+        this.RaisePropertyChanged(nameof(IsSidebarOnRight));
+        this.RaisePropertyChanged(nameof(SidebarColumn));
+        this.RaisePropertyChanged(nameof(ContentColumn));
+        this.RaisePropertyChanged(nameof(SidebarDock));
+        this.RaisePropertyChanged(nameof(SidebarBorderThickness));
+        this.RaisePropertyChanged(nameof(SidebarHintText));
+    }
 
     public WorkspaceSortCriterion WorkspaceSortCriterion =>
         SelectedWorkspaceTab?.WorkspaceSortCriterion ?? WorkspaceSortCriterion.Name;
@@ -539,6 +567,10 @@ public sealed class MainWindowViewModel : ReactiveObject
             SyncWorkspaceTabs();
             this.RaisePropertyChanged(nameof(HasWorkspaces));
         };
+
+        // Sidebar Kiri/Kanan applies instantly: Settings owns persistence,
+        // this VM only re-announces the derived column/border/hint bindings.
+        Settings.SidebarPositionChanged += _ => NotifySidebarPositionChanged();
 
         // Drive tailing from the selected tab: switching tabs stops the old source
         // and starts tailing the newly-selected file into that tab's LogEvents.

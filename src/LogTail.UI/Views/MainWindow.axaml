@@ -31,14 +31,16 @@
     </Style>
   </rxui:ReactiveWindow.Styles>
 
-  <Grid ColumnDefinitions="300,*">
+  <Grid>
+    <DockPanel LastChildFill="True">
     <!-- Sidebar: navigates the log files inside the current folder tab.
-         Tabs switch folders, so this is the only place to move between logs. -->
-    <Border Grid.Column="0"
+         Tabs switch folders, so this is the only place to move between logs.
+         Dock left/right follows Settings.SidebarPosition. -->
+    <Border DockPanel.Dock="{Binding SidebarDock}"
             Width="300"
             IsVisible="{Binding HasWorkspaces}"
             BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-            BorderThickness="0,0,1,0">
+            BorderThickness="{Binding SidebarBorderThickness}">
       <DockPanel LastChildFill="True">
         <StackPanel DockPanel.Dock="Top" Margin="8,6,8,4" Spacing="4">
           <TextBlock Text="{Binding SelectedWorkspaceLabel}"
@@ -158,7 +160,7 @@
       </DockPanel>
     </Border>
 
-    <DockPanel Grid.Column="1" LastChildFill="True">
+    <DockPanel LastChildFill="True">
       <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
         <Menu Grid.Column="0">
           <MenuItem Header="_File">
@@ -237,7 +239,7 @@
                            Opacity="0.6"
                            TextAlignment="Center"
                            TextWrapping="Wrap" />
-                <TextBlock Text="Klik file di sidebar kiri untuk melihat lognya di tab ini"
+                <TextBlock Text="Klik file di sidebar untuk melihat lognya di tab ini"
                            FontSize="12"
                            Opacity="0.7"
                            TextAlignment="Center"
@@ -326,9 +328,10 @@
       </Panel>
 
     </DockPanel>
+    </DockPanel>
 
     <!-- Global Loading Indicator Overlay (Centered in Window) -->
-    <Border Grid.Column="0" Grid.ColumnSpan="2" Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+    <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
             Opacity="0.85"
             IsVisible="{Binding ActiveLogTab.IsLoading, FallbackValue=False}"
             HorizontalAlignment="Stretch"

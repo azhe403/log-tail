@@ -5,7 +5,7 @@
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
         Width="420"
-        Height="240"
+        Height="330"
         CanResize="False"
         WindowStartupLocation="CenterOwner">
   <StackPanel Margin="16" Spacing="14">
@@ -15,6 +15,14 @@
                 SelectedItem="{Binding Theme, Mode=TwoWay}"
                 Width="200"
                 HorizontalAlignment="Left" />
+    </StackPanel>
+    <StackPanel Spacing="6">
+      <TextBlock Text="Posisi sidebar folder" FontWeight="SemiBold" />
+      <ComboBox ItemsSource="{Binding SidebarPositionOptions}"
+                SelectedItem="{Binding SidebarPosition, Mode=TwoWay}"
+                Width="200"
+                HorizontalAlignment="Left"
+                ToolTip.Tip="Atur sidebar folder di kiri atau kanan" />
     </StackPanel>
     <CheckBox Content="Reopen last session on startup"
               IsChecked="{Binding RestoreLastSession, Mode=TwoWay}" />

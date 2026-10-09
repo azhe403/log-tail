@@ -9,6 +9,7 @@ public sealed record WindowPlacement(
 
 public sealed record AppSettings(
     ThemeMode Theme = ThemeMode.System,
+    SidebarPosition SidebarPosition = SidebarPosition.Left,
     int BufferCapacity = 50_000,
     int MaxBufferCapacity = 2_000_000,
     TimeSpan PollInterval = default,

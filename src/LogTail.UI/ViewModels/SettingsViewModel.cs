@@ -11,6 +11,7 @@ public sealed class SettingsViewModel : ReactiveObject
 {
     private readonly SettingsStore _settings;
     private ThemeMode _theme;
+    private SidebarPosition _sidebarPosition;
     private bool _restoreLastSession;
 
     public SettingsViewModel(SettingsStore settings, ILogTailLogger? logger = null)
@@ -18,6 +19,7 @@ public sealed class SettingsViewModel : ReactiveObject
         _settings = settings;
         var loaded = _settings.Load();
         _theme = loaded.Theme;
+        _sidebarPosition = loaded.SidebarPosition;
         _restoreLastSession = loaded.RestoreLastSession;
     }
 
@@ -53,6 +55,22 @@ public sealed class SettingsViewModel : ReactiveObject
         }
     }
 
+    public SidebarPosition SidebarPosition
+    {
+        get => _sidebarPosition;
+        set
+        {
+            if (_sidebarPosition == value)
+            {
+                return;
+            }
+
+            this.RaiseAndSetIfChanged(ref _sidebarPosition, value);
+            _settings.Update(s => s with { SidebarPosition = value });
+            SidebarPositionChanged?.Invoke(value);
+        }
+    }
+
     public IReadOnlyList<ThemeMode> ThemeOptions { get; } = new[]
     {
         ThemeMode.System,
@@ -60,7 +78,15 @@ public sealed class SettingsViewModel : ReactiveObject
         ThemeMode.Dark
     };
 
+    public IReadOnlyList<SidebarPosition> SidebarPositionOptions { get; } = new[]
+    {
+        SidebarPosition.Left,
+        SidebarPosition.Right
+    };
+
     public event Action<ThemeMode>? ThemeChanged;
+
+    public event Action<SidebarPosition>? SidebarPositionChanged;
 
     public event Action<bool>? RestoreLastSessionChanged;
 }
