@@ -555,7 +555,8 @@ public sealed class MainWindowViewModel : ReactiveObject
         // rather than the folder itself.
         _selectedTabStatus = this.WhenAnyValue(
                 x => x.ActiveLogTab,
-                x => x.BufferCapacity)
+                x => x.BufferCapacity,
+                x => x.Search.MatchCountText)
             .Select(tuple => tuple.Item1 is null
                 ? Observable.Return(string.Empty)
                 : tuple.Item1.WhenAnyValue(
@@ -1267,7 +1268,11 @@ public sealed class MainWindowViewModel : ReactiveObject
 
         var state = tab.IsTailing ? "tailing" : tab.Status;
 
-        return $"{tab.FilePath} | {sizeText} | {modified} | {linesCount} | {rate} | {state}";
+        // The active query's count rides along in the log area's status line,
+        // so the results are visible without the panel open.
+        var searchSuffix = string.IsNullOrEmpty(matchCountText) ? string.Empty : $" | {matchCountText}";
+
+        return $"{tab.FilePath} | {sizeText} | {modified} | {linesCount} | {rate} | {state}{searchSuffix}";
     }
 
 }

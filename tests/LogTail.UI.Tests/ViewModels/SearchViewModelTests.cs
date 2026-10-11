@@ -132,8 +132,10 @@ public sealed class SearchViewModelTests : IDisposable
     }
 
     [AvaloniaFact]
-    public async Task MatchCountText_WhenCapped_ShowsPlusSuffix()
+    public async Task MatchCountText_CountsEveryMatch()
     {
+        // No display cap: the count is the real total and the list holds every
+        // match, so "10,001 results" also scrolls to 10,001 rows.
         var lines = new List<EnrichedLogEvent>();
         for (var i = 0; i < 10_001; i++)
         {
@@ -145,10 +147,10 @@ public sealed class SearchViewModelTests : IDisposable
         var sut = CreateViewModel(tab);
         sut.SetActiveTab(tab);
         sut.SearchText = "hit";
-        await WaitUntilAsync(() => sut.Matches.Count == 10_000, TimeSpan.FromSeconds(15));
+        await WaitUntilAsync(() => sut.Matches.Count == 10_001, TimeSpan.FromSeconds(15));
 
-        sut.Matches.Should().HaveCount(10_000);
-        sut.MatchCountText.Should().Be($"{10_000:N0}+ results");
+        sut.MatchCount.Should().Be(10_001);
+        sut.MatchCountText.Should().Be($"{10_001:N0} results");
     }
 
     [AvaloniaFact]

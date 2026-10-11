@@ -25,7 +25,6 @@ public sealed class SearchViewModel : ReactiveObject
     private const double DefaultPanelHeight = 180;
     private const double MinPanelHeight = 80;
     private const double MaxPanelHeight = 800;
-    private const int MaxMatches = 10_000;
 
     private static readonly GridLength ZeroHeight = new(0, GridUnitType.Pixel);
 
@@ -39,7 +38,6 @@ public sealed class SearchViewModel : ReactiveObject
     private bool _isPanelOpen;
     private TabViewModel? _selectedTab;
     private int _matchCount;
-    private bool _capped;
     private GridLength _panelHeight = new(DefaultPanelHeight, GridUnitType.Pixel);
     private LogSearchMatch? _selectedMatch;
     private int _searchGeneration;
@@ -162,12 +160,7 @@ public sealed class SearchViewModel : ReactiveObject
         ? string.Empty
         : MatchCount == 0
             ? "No matches"
-            : _capped
-                // Capped: show the display cap with "+" ("at least this many")
-                // — the list only holds the first MaxMatches items, so the exact
-                // total is not something the user can act on.
-                ? $"{MaxMatches:N0}+ results"
-                : $"{MatchCount:N0} results";
+            : $"{MatchCount:N0} results";
 
     public LogSearchMatch? SelectedMatch
     {
@@ -224,7 +217,6 @@ public sealed class SearchViewModel : ReactiveObject
             Interlocked.Increment(ref _searchGeneration);
             Matches.Clear();
             MatchCount = 0;
-            _capped = false;
             this.RaisePropertyChanged(nameof(MatchCountText));
             return;
         }
@@ -249,9 +241,8 @@ public sealed class SearchViewModel : ReactiveObject
                 }
 
                 Matches.Clear();
-                Matches.AddRange(result.Matches);
-                MatchCount = result.Total;
-                _capped = result.Total > MaxMatches;
+                Matches.AddRange(result);
+                MatchCount = result.Count;
                 this.RaisePropertyChanged(nameof(MatchCountText));
             });
     }
@@ -267,12 +258,11 @@ public sealed class SearchViewModel : ReactiveObject
         return list.ToArray();
     }
 
-    private static (List<LogSearchMatch> Matches, int Total) Scan(
+    private static List<LogSearchMatch> Scan(
         string query,
         (TabViewModel Tab, EnrichedLogEvent[] Events)[] snapshots)
     {
         var matches = new List<LogSearchMatch>();
-        var total = 0;
 
         foreach (var (tab, events) in snapshots)
         {
@@ -283,14 +273,10 @@ public sealed class SearchViewModel : ReactiveObject
                     continue;
                 }
 
-                total++;
-                if (matches.Count < MaxMatches)
-                {
-                    matches.Add(new LogSearchMatch(tab, logEvent));
-                }
+                matches.Add(new LogSearchMatch(tab, logEvent));
             }
         }
 
-        return (matches, total);
+        return matches;
     }
 }

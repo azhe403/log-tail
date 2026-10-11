@@ -23,17 +23,18 @@ Tail/buffer/session logic is untouched — this is a read-only view over the `Lo
 │ TabControl (existing log view, unchanged)                    │
 │                                                              │
 ├──────────────────────────────────────────────────────╫────────┤ ← GridSplitter (drag)
-│ 12.345 hasil   [✓] All tabs                          [×]                             │ ← results panel
+│ 12.345 results   [✓] All tabs                          [×]                             │ ← results panel
 │ error.log  1042 · NullReferenceException at Foo.Bar()        │
 │ app.log      88 · WARN payment timeout, retrying             │
 └──────────────────────────────────────────────────────────────┘
- (status bar unchanged, below the panel)
+ (status bar below the panel; gains the match count while a query is active)
 ```
 
 - Search box sits at the right end of the toolbar, just left of the settings button — fixed 240px, no stretch. Watermark "Find in logs… (Ctrl+F)".
 - Results panel docks above the status bar. Default height 180px; the GridSplitter above it drags between 80px and the rest of the window. The resized height is kept for the rest of the session; a restart returns to 180px.
 - `All tabs` toggle (panel header, default **off**): off → search only the log on screen; on → every open tab, results labeled by file.
 - Empty query → panel and splitter hidden, no space reserved (row height 0).
+- While a query is active, the log area's status line appends the same count (`… | N results`) — visible even with the panel closed.
 - Closing the panel (`×` / `Esc`) hides it but **keeps the query** — `Ctrl+F` or the next keystroke reopens the same results.
 
 ### 2.2 Interactions
@@ -63,12 +64,12 @@ Owned by `MainWindowViewModel`. Constructor takes `ObservableCollection<TabViewM
 - `SearchText` (string) — TwoWay bound to the TextBox. Avalonia's `TextBox.Text` default `UpdateSourceTrigger` is `PropertyChanged`, so every keystroke reaches the VM; the VM debounces 300ms before scanning.
 - `SearchAllTabs` (bool, default false) — the scope toggle.
 - `SelectedTab` (TabViewModel?) + `SetActiveTab(TabViewModel?)` — the parent pushes the currently selected tab whenever it changes (including a folder tab swapping its preview). A push re-triggers the debounced scan.
-- Scan: substring match with `StringComparison.OrdinalIgnoreCase`, capped at 10,000 matches (header shows `10.000+ results` when capped).
+- Scan: substring match with `StringComparison.OrdinalIgnoreCase`. No result cap — the count is the real total and the list holds every match (each match is a small record holding a tab reference and the event it points at; the scan's cost is the line walk either way; the ListBox virtualizes so only visible rows render).
   - **Off**: search `SelectedTab?.LogSource.LogEvents` only (so a folder tab searches its previewed file); matches carry `Tab = SelectedTab`, so a click never switches tabs.
   - **On**: iterate `tabs` in order; per tab iterate `t.LogSource.LogEvents`; matches carry that tab.
 - The scan runs on `Task.Run`; `Matches` (a `BulkObservableCollection<LogSearchMatch>` cleared and refilled via `AddRange` — one UI notification per search) and `MatchCount` land back on the UI thread. A generation counter drops a scan superseded by a newer one.
 - Re-scans on: `SearchText` (debounced 300ms), `SearchAllTabs` change, `SetActiveTab` change, `tabs.CollectionChanged` (tab opened/closed).
-- `Matches`, `MatchCount`, `MatchCountText` (`"N results"` / `"10.000+ results"` / `"No matches"`), `SelectedMatch`, `HasQuery` (trimmed non-empty), `IsPanelOpen`/`ShowPanel` (panel visibility), `OpenPanel()`/`ClosePanel()`, `PanelHeight`.
+- `Matches`, `MatchCount`, `MatchCountText` (`"N results"` / `"No matches"`), `SelectedMatch`, `HasQuery` (trimmed non-empty), `IsPanelOpen`/`ShowPanel` (panel visibility), `OpenPanel()`/`ClosePanel()`, `PanelHeight`.
 - `PanelHeight` is a **`GridLength`** (Avalonia.Controls), not a `double`: the results `RowDefinition.Height` then binds with no converter, and the GridSplitter's `DragCompleted` hook stores the resized length. Serves `0` while the panel is hidden (no query, or closed — the row reserves no space) and the last dragged height otherwise.
 - `JumpToMatchCommand` / `JumpToMatch(match)`: if `match.Tab.LogSource.LogEvents` still contains `match.Event`, call `activateTab(match.Tab)` (a no-op when it is already the selected tab) then handle the `ScrollToLine` interaction so the View scrolls. A line evicted from the ring buffer (or a tab closed) means no jump.
 - `CloseCommand` / `ClosePanel()`: hides the panel without touching the query. `OpenPanel()` reopens it (`ShowPanel` = query present **and** panel open).
@@ -87,7 +88,7 @@ public sealed record LogSearchMatch(TabViewModel Tab, EnrichedLogEvent Event)
 
 ### 3.3 MainWindowViewModel
 
-Two small additions, keeping the (deferred) god-module refactor at bay:
+Three small additions, keeping the (deferred) god-module refactor at bay:
 
 ```csharp
 public SearchViewModel Search { get; }
@@ -185,8 +186,8 @@ private void SyncActiveLogTab()
 
 ## 5. Edge Cases
 
-- No matches → panel stays open showing `No matches`, header count `0 results`.
-- Common short query (e.g. `e`) → 10,000-match cap keeps the collection and the ListBox (virtualized) responsive; header shows `10.000+ results`.
+- No matches → panel stays open showing `No matches`; the status line shows `| No matches`.
+- Common short query (e.g. `e`) → every match is collected; the header shows the real total (tens of thousands) and the ListBox virtualizes, so scrolling renders only visible rows.
 - Switching tabs (or previewing another file in a folder tab) with a query open → off-mode results follow the tab on screen.
 - Match line evicted from the ring buffer, or its tab closed, before the click → `JumpToMatch` does nothing (checked before switching tabs).
 - All tabs closed → empty results, panel hidden.
@@ -204,13 +205,18 @@ private void SyncActiveLogTab()
 - on mode: results collected from every open tab in tab order, then line order; toggling back to off narrows to the active tab;
 - matching is case-insensitive;
 - a folder tab's preview lines are searched in off mode and the match points at the folder tab;
-- `MatchCount`/`MatchCountText` correct, including the 10,000 cap wording;
+- `MatchCount`/`MatchCountText` correct, including a count above the old 10,000 cap (no cap anymore — real total, full list);
 - `JumpToMatch` with a present line → activates the right tab (captured action) and fires the `ScrollToLine` interaction;
 - `JumpToMatch` with an evicted line → does nothing.
 
 `tests/LogTail.UI.Tests/Views/SearchPanelVisibilityTests.cs` (`[AvaloniaFact]` per project convention — anything touching the dispatcher):
 
 - setting a query on a constructed window's ViewModel shows the panel; clearing hides it.
+
+`tests/LogTail.UI.Tests/MainWindowViewModelSearchStatusTests.cs` (`[AvaloniaFact]` — drives real tailing into the VM):
+
+- with a query active, the status line carries the match count, including with the results panel closed;
+- clearing the query drops the count from the status line.
 
 Not unit tested: debounce timing, the scroll interaction handler, and keyboard shortcuts — verified manually per §8. Test execution follows repo preference: only the touched projects, not the full suite.
 

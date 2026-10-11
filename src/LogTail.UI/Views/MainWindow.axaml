@@ -161,7 +161,7 @@
     </Border>
 
     <DockPanel LastChildFill="True">
-      <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto">
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto">
         <Menu Grid.Column="0">
           <MenuItem Header="_File">
             <MenuItem Header="_Open..." Command="{Binding OpenFileCommand}" />
