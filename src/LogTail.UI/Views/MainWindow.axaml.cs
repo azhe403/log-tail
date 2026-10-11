@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using System.IO;
 using Avalonia.ReactiveUI;
@@ -35,6 +36,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
     private bool _isRestoringPlacement;
 
     private ScrollViewer? _scrollViewer;
+    private TextBox? _searchTextBox;
     private bool _isProgrammaticScroll;
     private bool _scrollRequested;
     private IDisposable? _activeTabListener;
@@ -108,6 +110,21 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DragLeaveEvent, OnDragLeave);
 
+        // handledEventsToo: the search TextBox marks Enter handled itself, but
+        // the find shortcuts must still reach the window.
+        _searchTextBox = this.FindControl<TextBox>("SearchTextBox");
+
+        // Returning to the find box reopens the results panel: the panel is a
+        // view of the query, so focusing the box brings the results back.
+        // Focusing is also the reliable reopen path for Ctrl+F, whose bubbled
+        // KeyDown was observed not to reach this window handler.
+        if (_searchTextBox is not null)
+        {
+            _searchTextBox.GotFocus += (_, _) => ViewModel?.Search.OpenPanel();
+        }
+
+        AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
+
         this.WhenActivated(disposables =>
         {
             // Register ReactiveUI Interaction handler for File Picker dialog
@@ -116,6 +133,18 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
 
             ViewModel?.ShowSettingsDialog.RegisterHandler(DoShowSettingsAsync)
                 .DisposeWith(disposables);
+
+            // Search: the view scrolls the on-screen log to the matched line.
+            ViewModel?.Search.ScrollToLine.RegisterHandler(async interaction =>
+            {
+                // A jump to another tab needs that tab's content host to exist
+                // and lay out first, so the scroll waits one layout pass.
+                var scrolled = await Dispatcher.UIThread.InvokeAsync(
+                    () => ScrollToMatch(interaction.Input),
+                    DispatcherPriority.Loaded);
+                interaction.SetOutput(scrolled);
+            })
+            .DisposeWith(disposables);
 
             // Subscribe to ViewModel AutoScroll changes using WhenAnyValue
             this.WhenAnyValue(x => x.ViewModel!.AutoScroll)
@@ -303,6 +332,107 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         {
             Dispatcher.UIThread.Post(() => _isProgrammaticScroll = false, DispatcherPriority.Normal);
         }
+    }
+
+    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm)
+        {
+            return;
+        }
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.F)
+        {
+            _searchTextBox?.Focus();
+            vm.Search.OpenPanel();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape && (_searchTextBox?.IsFocused == true || vm.Search.ShowPanel))
+        {
+            // Close only: the query stays so Ctrl+F or the next keystroke
+            // brings the same results back.
+            vm.Search.ClosePanel();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter && _searchTextBox?.IsFocused == true &&
+                 vm.Search.Matches.FirstOrDefault() is { } first)
+        {
+            vm.Search.JumpToMatch(first);
+            e.Handled = true;
+        }
+    }
+
+    private void OnSearchResultActivated(object? sender, TappedEventArgs e)
+    {
+        if (sender is ListBox { SelectedItem: LogSearchMatch match })
+        {
+            ViewModel?.Search.JumpToMatch(match);
+        }
+    }
+
+    /// <summary>
+    /// Stores the dragged panel height on the view model so the panel keeps
+    /// its size when it closes and reopens during the session. The height is
+    /// clamped by the view model; any adjustment is written back to the row.
+    /// </summary>
+    private void OnSearchPanelSplitterDragCompleted(object? sender, VectorEventArgs e)
+    {
+        if (sender is not GridSplitter { Parent: Grid { RowDefinitions.Count: >= 3 } grid })
+        {
+            return;
+        }
+
+        if (ViewModel is not { } vm)
+        {
+            return;
+        }
+
+        var row = grid.RowDefinitions[2];
+        vm.Search.PanelHeight = row.Height;
+        if (row.Height != vm.Search.PanelHeight)
+        {
+            row.Height = vm.Search.PanelHeight;
+        }
+    }
+
+    /// <summary>
+    /// Scrolls the on-screen log so the matched line is visible. BringIntoView
+    /// handles a realized container; otherwise the uniform row height (every
+    /// log row is 20px, TextWrapping=NoWrap) gives the offset directly.
+    /// </summary>
+    private bool ScrollToMatch(LogSearchMatch match)
+    {
+        var events = match.Tab.LogSource.LogEvents;
+        var index = events.IndexOf(match.Event);
+        if (index < 0 || ViewModel is null)
+        {
+            return false;
+        }
+
+        var scrollViewer = this.FindControl<TabControl>("MainTabControl")?
+            .FindDescendantOfType<ScrollViewer>();
+        if (scrollViewer is null)
+        {
+            return false;
+        }
+
+        if (scrollViewer.FindDescendantOfType<ItemsControl>() is { } itemsControl &&
+            itemsControl.ContainerFromIndex(index) is { } container)
+        {
+            container.BringIntoView();
+            return true;
+        }
+
+        var rowHeight = scrollViewer.Extent.Height / Math.Max(1, events.Count);
+        var target = (index * rowHeight) - (scrollViewer.Viewport.Height / 2);
+        var maxOffset = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
+
+        _isProgrammaticScroll = true;
+        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, Math.Clamp(target, 0, maxOffset));
+        Dispatcher.UIThread.Post(() => _isProgrammaticScroll = false, DispatcherPriority.Normal);
+        return true;
     }
 
     private async Task DoShowOpenFileDialogAsync(IInteractionContext<Unit, string?> interaction)

@@ -4,6 +4,8 @@ using Avalonia.ReactiveUI;
 using Xunit;
 
 [assembly: CollectionBehavior(DisableTestParallelization = true)]
+[assembly: AvaloniaTestApplication(typeof(LogTail.UI.Tests.TestApp))]
+[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
 
 namespace LogTail.UI.Tests;
 

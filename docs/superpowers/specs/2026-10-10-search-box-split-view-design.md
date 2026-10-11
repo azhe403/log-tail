@@ -23,17 +23,18 @@ Tail/buffer/session logic is untouched — this is a read-only view over the `Lo
 │ TabControl (existing log view, unchanged)                    │
 │                                                              │
 ├──────────────────────────────────────────────────────╫────────┤ ← GridSplitter (drag)
-│ 12.345 hasil   [✓] All tabs                          [×]     │ ← results panel
+│ 12.345 hasil   [✓] All tabs                          [×]                             │ ← results panel
 │ error.log  1042 · NullReferenceException at Foo.Bar()        │
 │ app.log      88 · WARN payment timeout, retrying             │
 └──────────────────────────────────────────────────────────────┘
  (status bar unchanged, below the panel)
 ```
 
-- Search box sits in the toolbar between the menu and the settings button, and stretches.
+- Search box sits at the right end of the toolbar, just left of the settings button — fixed 240px, no stretch. Watermark "Find in logs… (Ctrl+F)".
 - Results panel docks above the status bar. Default height 180px; the GridSplitter above it drags between 80px and the rest of the window. The resized height is kept for the rest of the session; a restart returns to 180px.
 - `All tabs` toggle (panel header, default **off**): off → search only the log on screen; on → every open tab, results labeled by file.
 - Empty query → panel and splitter hidden, no space reserved (row height 0).
+- Closing the panel (`×` / `Esc`) hides it but **keeps the query** — `Ctrl+F` or the next keystroke reopens the same results.
 
 ### 2.2 Interactions
 
@@ -44,12 +45,14 @@ Tail/buffer/session logic is untouched — this is a read-only view over the `Lo
 | Switch tabs while a query is open | Results follow the tab on screen (off mode); unchanged in on mode |
 | Click a result row | Off mode: scroll that line on screen. On mode: `SelectedTab = match.Tab`, then scroll |
 | `Enter` in the search box | Jump to the first result |
-| Press `×`, clear the text, or `Esc` | Panel closes, results cleared |
-| `Ctrl+F` anywhere | Focus the search box |
+| `×` / `Esc` | Panel closes, **query stays**; `Ctrl+F` or typing reopens it |
+| Clear the text | Panel closes; typing a query opens it again |
+| `Ctrl+F` anywhere | Focus the search box and reopen the panel |
+| Click / focus the search box | Reopens the panel (query still present) |
 
 ### 2.3 Result row
 
-`[file name]` (ellipsized, ~150px) · line number (~55px, right-aligned) · line text (ellipsized, full line as tooltip). The file column is always shown: in off mode it names the file on screen, in on mode the source of each match.
+`[file name]` (Auto width, capped 150px, ellipsized) · line number (~55px, right-aligned) · line text (ellipsized, full line as tooltip). The file column is always shown: in off mode it names the file on screen, in on mode the source of each match.
 
 ## 3. Components & Data Flow
 
@@ -60,15 +63,15 @@ Owned by `MainWindowViewModel`. Constructor takes `ObservableCollection<TabViewM
 - `SearchText` (string) — TwoWay bound to the TextBox. Avalonia's `TextBox.Text` default `UpdateSourceTrigger` is `PropertyChanged`, so every keystroke reaches the VM; the VM debounces 300ms before scanning.
 - `SearchAllTabs` (bool, default false) — the scope toggle.
 - `SelectedTab` (TabViewModel?) + `SetActiveTab(TabViewModel?)` — the parent pushes the currently selected tab whenever it changes (including a folder tab swapping its preview). A push re-triggers the debounced scan.
-- Scan: substring match with `StringComparison.OrdinalIgnoreCase`, capped at 10,000 matches (header shows `10.000+ hasil` when capped).
+- Scan: substring match with `StringComparison.OrdinalIgnoreCase`, capped at 10,000 matches (header shows `10.000+ results` when capped).
   - **Off**: search `SelectedTab?.LogSource.LogEvents` only (so a folder tab searches its previewed file); matches carry `Tab = SelectedTab`, so a click never switches tabs.
   - **On**: iterate `tabs` in order; per tab iterate `t.LogSource.LogEvents`; matches carry that tab.
 - The scan runs on `Task.Run`; `Matches` (a `BulkObservableCollection<LogSearchMatch>` cleared and refilled via `AddRange` — one UI notification per search) and `MatchCount` land back on the UI thread. A generation counter drops a scan superseded by a newer one.
 - Re-scans on: `SearchText` (debounced 300ms), `SearchAllTabs` change, `SetActiveTab` change, `tabs.CollectionChanged` (tab opened/closed).
-- `Matches`, `MatchCount`, `MatchCountText` (`"N hasil"` / `"10.000+ hasil"` / `"Tidak ada kecocokan"`), `SelectedMatch`, `HasQuery` (trimmed non-empty), `PanelHeight`.
-- `PanelHeight` is a **`GridLength`** (Avalonia.Controls), not a `double`: the results `RowDefinition.Height` then binds TwoWay with no converter, and the GridSplitter writes the resized length straight back. Serves `0` when there is no query (panel reserves no space) and 180px on reopen, keeping the last dragged height otherwise.
+- `Matches`, `MatchCount`, `MatchCountText` (`"N results"` / `"10.000+ results"` / `"No matches"`), `SelectedMatch`, `HasQuery` (trimmed non-empty), `IsPanelOpen`/`ShowPanel` (panel visibility), `OpenPanel()`/`ClosePanel()`, `PanelHeight`.
+- `PanelHeight` is a **`GridLength`** (Avalonia.Controls), not a `double`: the results `RowDefinition.Height` then binds with no converter, and the GridSplitter's `DragCompleted` hook stores the resized length. Serves `0` while the panel is hidden (no query, or closed — the row reserves no space) and the last dragged height otherwise.
 - `JumpToMatchCommand` / `JumpToMatch(match)`: if `match.Tab.LogSource.LogEvents` still contains `match.Event`, call `activateTab(match.Tab)` (a no-op when it is already the selected tab) then handle the `ScrollToLine` interaction so the View scrolls. A line evicted from the ring buffer (or a tab closed) means no jump.
-- `CloseCommand`: clears `SearchText` — which folds `PanelHeight` to 0 and hides the panel.
+- `CloseCommand` / `ClosePanel()`: hides the panel without touching the query. `OpenPanel()` reopens it (`ShowPanel` = query present **and** panel open).
 - `Interaction<LogSearchMatch, bool> ScrollToLine` — the View's scroll hook (documented ReactiveUI/Avalonia pattern, same style as the existing `ShowOpenFileDialog`).
 
 ### 3.2 LogSearchMatch (new file)
@@ -104,7 +107,7 @@ private void SyncActiveLogTab()
 
 ### 3.4 MainWindow.axaml
 
-- Toolbar Grid becomes `ColumnDefinitions="Auto,*,Auto"`: Menu | `TextBox x:Name="SearchTextBox"` (`Text="{Binding Search.SearchText}"`, Watermark "Find in logs… (Ctrl+F)") | settings button (unchanged).
+- Toolbar Grid becomes `ColumnDefinitions="Auto,*,Auto"`: Menu | `TextBox x:Name="SearchTextBox"` fixed 240px right-aligned (`Text="{Binding Search.SearchText}"`, Watermark "Find in logs… (Ctrl+F)") | settings button (unchanged).
 - The TabControl's fill slot inside the content DockPanel becomes a Grid:
 
 ```xml
@@ -140,9 +143,10 @@ private void SyncActiveLogTab()
                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:LogSearchMatch">
-            <Grid ColumnDefinitions="150,55,*">
-              <TextBlock Grid.Column="0" Text="{Binding FileName}" TextTrimming="CharacterEllipsis"
-                         FontSize="11" Opacity="0.7" VerticalAlignment="Center" />
+            <Grid ColumnDefinitions="Auto,55,*" MinHeight="20" VerticalAlignment="Center">
+              <TextBlock Grid.Column="0" Text="{Binding FileName}" MaxWidth="150"
+                         TextTrimming="CharacterEllipsis" FontSize="11" Opacity="0.7"
+                         VerticalAlignment="Center" />
               <TextBlock Grid.Column="1" Text="{Binding LineNumber}" TextAlignment="Right"
                          FontSize="11" Opacity="0.5" VerticalAlignment="Center" Margin="0,0,8,0" />
               <TextBlock Grid.Column="2" Text="{Binding Line}" TextTrimming="CharacterEllipsis"
@@ -158,7 +162,7 @@ private void SyncActiveLogTab()
 </Grid>
 ```
 
-`CloseCommand` clears `SearchText` (which folds `PanelHeight` to 0 and hides the panel). Existing window styles and the empty-state/loading overlays are untouched.
+`CloseCommand` hides the panel (`ShowPanel`), leaving the query intact. Existing window styles and the empty-state/loading overlays are untouched.
 
 ### 3.5 MainWindow.axaml.cs
 
@@ -181,8 +185,8 @@ private void SyncActiveLogTab()
 
 ## 5. Edge Cases
 
-- No matches → panel stays open showing `Tidak ada kecocokan`, header count `0 hasil`.
-- Common short query (e.g. `e`) → 10,000-match cap keeps the collection and the ListBox (virtualized) responsive; header shows `10.000+ hasil`.
+- No matches → panel stays open showing `No matches`, header count `0 results`.
+- Common short query (e.g. `e`) → 10,000-match cap keeps the collection and the ListBox (virtualized) responsive; header shows `10.000+ results`.
 - Switching tabs (or previewing another file in a folder tab) with a query open → off-mode results follow the tab on screen.
 - Match line evicted from the ring buffer, or its tab closed, before the click → `JumpToMatch` does nothing (checked before switching tabs).
 - All tabs closed → empty results, panel hidden.
@@ -194,6 +198,7 @@ private void SyncActiveLogTab()
 `tests/LogTail.UI.Tests/ViewModels/SearchViewModelTests.cs` (xUnit + FluentAssertions, plain VM — no Avalonia host needed):
 
 - empty or whitespace query → no matches, `PanelHeight` 0;
+- `ClosePanel` keeps `SearchText`; the next keystroke reopens the panel;
 - off mode: a query present in two open tabs returns only the active tab's lines, in line order;
 - `SetActiveTab` to another tab → results follow the new tab;
 - on mode: results collected from every open tab in tab order, then line order; toggling back to off narrows to the active tab;
@@ -220,4 +225,4 @@ Not unit tested: debounce timing, the scroll interaction handler, and keyboard s
 
 1. Build the solution; run `tests/LogTail.UI.Tests` (and `tests/LogTail.Core.Tests` only if shared code moves — it should not).
 2. Per repo rule for desktop changes: build and run `LogTail.exe`, then hand the app to the user to verify manually before calling it done.
-3. Manual checks: open 2+ log files; with `All tabs` off, type a word present in both → only the on-screen file's lines; switch tabs → results follow; toggle `All tabs` → both files listed with file labels; click a result from the other tab → tab switches and the line is on screen; drag the splitter → panel resizes; `×` and `Esc` close; `Ctrl+F` focuses the box; a query with no matches shows `Tidak ada kecocokan`.
+3. Manual checks: open 2+ log files; with `All tabs` off, type a word present in both → only the on-screen file's lines; switch tabs → results follow; toggle `All tabs` → both files listed with file labels; click a result from the other tab → tab switches and the line is on screen; drag the splitter → panel resizes; `×` and `Esc` close; `Ctrl+F` focuses the box; a query with no matches shows `No matches`.

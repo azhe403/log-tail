@@ -85,12 +85,24 @@ public sealed class MainWindowViewModel : ReactiveObject
     private void SyncActiveLogTab()
     {
         ActiveLogTab = SelectedTab is { IsFolder: true } folder ? folder.Preview : SelectedTab;
+
+        // Preview swaps route through here too, so the search's scope tab
+        // follows a folder tab changing the file it displays. Guarded with ?
+        // because the setter can fire before the ctor assigns Search.
+        Search?.SetActiveTab(SelectedTab);
     }
 
     private readonly ObservableAsPropertyHelper<string> _selectedTabStatus;
     public string SelectedTabStatus => _selectedTabStatus.Value;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
+
+    /// <summary>
+    /// Search state for the toolbar search box and the bottom results panel.
+    /// Owned here so tabs flow into it, but self-contained: it receives the
+    /// selected tab and an activate callback, not this view model.
+    /// </summary>
+    public SearchViewModel Search { get; }
 
     // --- Workspace (folder tabs) ---
     // A folder tab is a workspace; the left sidebar navigates the log files
@@ -511,6 +523,7 @@ public sealed class MainWindowViewModel : ReactiveObject
         _sourceFactory = sourceFactory;
         _logger = logger;
         Settings = settingsViewModel ?? new SettingsViewModel(settings, logger);
+        Search = new SearchViewModel(Tabs, tab => SelectedTab = tab);
 
         // Restore settings.
         var loaded = _settings.Load();
