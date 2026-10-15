@@ -221,8 +221,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
             return;
         }
 
-        // Pindah tab bukan aksi scroll user — bekukan evaluasi offset
-        // sampai viewer baru selesai layout agar AutoScroll tidak ikut mati.
+        // Switching tabs is not a user scroll action — freeze offset evaluation
+        // until the new viewer finishes layout so AutoScroll does not turn off.
         _suppressOffsetEvents = true;
 
         var tab = ViewModel.ActiveLogTab;
@@ -286,7 +286,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         }
 
         var maxOffsetY = extentHeight - viewportHeight;
-        // Toleransi 15 pixel dari dasar scroll
+        // 15-pixel tolerance from the scroll baseline
         var isAtBottom = offset.Y >= maxOffsetY - 15.0;
 
         if (ViewModel.AutoScroll != isAtBottom)

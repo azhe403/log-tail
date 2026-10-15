@@ -1,3 +1,4 @@
+using LogTail.Core.Diagnostics;
 using LogTail.Core.Models;
 using LogTail.Core.Workspace;
 using LogTail.UI.Collections;
@@ -17,6 +18,7 @@ public sealed class TabViewModel : ReactiveObject
     private DateTime _lastModified;
     private double _linesPerSecond;
     private bool _isTailing;
+    private double _readBytesPerSecond;
 
     private WorkspaceSortCriterion _workspaceSortCriterion = WorkspaceSortCriterion.Name;
     public WorkspaceSortCriterion WorkspaceSortCriterion
@@ -94,6 +96,38 @@ public sealed class TabViewModel : ReactiveObject
         get => _isTailing;
         set => this.RaiseAndSetIfChanged(ref _isTailing, value);
     }
+
+    /// <summary>
+    /// Bytes per second this tab's file is being read at, measured as the growth of
+    /// its size between the window's one-second samples. Only the tab on screen
+    /// tails, so a background tab keeps the value the window last wrote here (0).
+    /// </summary>
+    public double ReadBytesPerSecond
+    {
+        get => _readBytesPerSecond;
+        set => this.RaiseAndSetIfChanged(ref _readBytesPerSecond, value);
+    }
+
+    /// <summary>
+    /// Estimated memory this tab's rendered buffer holds — see
+    /// <see cref="BufferMemoryEstimator"/>. An estimate, not a profiler reading,
+    /// which is why the UI prefixes it with "~". Recomputes on read: the window
+    /// samples it once a second for the tab on screen, and the tooltip on demand.
+    /// </summary>
+    public long EstimatedBufferBytes => BufferMemoryEstimator.Estimate(LogEvents);
+
+    /// <summary>How big this tab's buffer is, in the words the tab tooltip uses.</summary>
+    public string BufferFactsText =>
+        $"{WorkspaceFile.FormatLineCount(LineCount)} · ~{WorkspaceFile.FormatSize(EstimatedBufferBytes)} held";
+
+    /// <summary>
+    /// Read rate for the tab tooltip. Shows the rate — 0 included — while the tab is
+    /// tailing, so "being read but quiet" stays distinguishable from "Idle" for a tab
+    /// that is not on screen.
+    /// </summary>
+    public string ReadRateText => IsTailing
+        ? $"Read {WorkspaceFile.FormatSize((long)ReadBytesPerSecond)}/s"
+        : "Idle";
 
     /// <summary>
     /// True when this tab represents an open workspace folder instead of a
@@ -185,6 +219,7 @@ public sealed class TabViewModel : ReactiveObject
         _totalLinesAppended = 0;
         LineCount = 0;
         LinesPerSecond = 0;
+        ReadBytesPerSecond = 0;
         FileSize = 0;
         LastModified = default;
         Status = "Idle";

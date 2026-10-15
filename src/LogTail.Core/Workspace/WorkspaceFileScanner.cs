@@ -36,6 +36,14 @@ public sealed record WorkspaceFile(string Name, string Path, long Size, DateTime
         >= 1024 => $"{bytes / 1024.0:0.#} KB",
         _ => $"{bytes} B",
     };
+
+    /// <summary>
+    /// "N line"/"N lines" for a held line count. The status bar and the tab
+    /// tooltip both report one, and "1 lines" reads broken; a shared helper
+    /// keeps them from disagreeing later.
+    /// </summary>
+    public static string FormatLineCount(int count) =>
+        count == 1 ? "1 line" : $"{count:N0} lines";
 }
 
 /// <summary>

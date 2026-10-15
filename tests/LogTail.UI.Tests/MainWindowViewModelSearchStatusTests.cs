@@ -15,6 +15,7 @@ namespace LogTail.UI.Tests;
 [Collection("MainWindowViewModelTests")]
 public sealed class MainWindowViewModelSearchStatusTests : IDisposable
 {
+    private readonly List<MainWindowViewModel> _created = new();
     private readonly string _tempDir;
 
     public MainWindowViewModelSearchStatusTests()
@@ -25,17 +26,30 @@ public sealed class MainWindowViewModelSearchStatusTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var vm in _created)
+        {
+            vm.Dispose();
+        }
+
         if (Directory.Exists(_tempDir))
         {
             Directory.Delete(_tempDir, recursive: true);
         }
     }
 
+    private MainWindowViewModel CreateViewModel()
+    {
+        var logger = new ConsoleLogger();
+        var vm = new MainWindowViewModel(new SettingsStore(_tempDir, logger), new LogSourceFactory(logger));
+        _created.Add(vm);
+        return vm;
+    }
+
     [AvaloniaFact]
     public async Task SelectedTabStatus_WhenSearching_ShowsMatchCountInLogArea()
     {
         var logger = new ConsoleLogger();
-        var sut = new MainWindowViewModel(new SettingsStore(_tempDir, logger), new LogSourceFactory(logger));
+        var sut = CreateViewModel();
         var path = Path.Combine(_tempDir, "search-status.log");
         File.WriteAllLines(path, new[] { "alpha hit", "beta line", "alpha again" });
 
@@ -53,8 +67,7 @@ public sealed class MainWindowViewModelSearchStatusTests : IDisposable
     [AvaloniaFact]
     public async Task SelectedTabStatus_WhenQueryCleared_DropsMatchCount()
     {
-        var logger = new ConsoleLogger();
-        var sut = new MainWindowViewModel(new SettingsStore(_tempDir, logger), new LogSourceFactory(logger));
+        var sut = CreateViewModel();
         var path = Path.Combine(_tempDir, "search-status-clear.log");
         File.WriteAllLines(path, new[] { "alpha hit", "beta line", "alpha again" });
 

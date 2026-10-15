@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
+using LogTail.Core.Diagnostics;
 using LogTail.Core.Logging;
 using LogTail.Core.Models;
 using LogTail.Core.Persistence;
@@ -47,7 +48,14 @@ public partial class App : Application
             ApplyTheme(settingsViewModel.Theme);
             settingsViewModel.ThemeChanged += ApplyTheme;
 
-            var viewModel = new MainWindowViewModel(settings, factory, logger, settingsViewModel);
+            // One sampler for the app's lifetime, created here at the root and
+            // deliberately never disposed: successive samples share its CPU
+            // interval, and closing the process handle under an in-flight
+            // sample deadlocks (see MainWindowViewModel.Dispose for the suite
+            // runs that proved it).
+            var viewModel = new MainWindowViewModel(
+                settings, factory, logger, settingsViewModel,
+                resourceSampler: new ProcessResourceSampler());
 
             // Session tracking. Created before restore so it observes the tabs
             // that restore adds, but disabled until restore finishes to avoid
@@ -84,6 +92,7 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 viewModel.WorkspaceSortChanged -= tracker.SaveNow;
+                viewModel.Dispose();
                 tracker.Dispose();
             };
 
@@ -182,7 +191,7 @@ public partial class App : Application
 
         if (missing.Count > 0)
         {
-            viewModel.StatusMessage = $"{missing.Count} file dari sesi terakhir tidak ditemukan";
+            viewModel.StatusMessage = $"{missing.Count} files from the last session not found";
         }
     }
 

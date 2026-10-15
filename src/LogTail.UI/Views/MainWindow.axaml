@@ -156,7 +156,7 @@
                    FontSize="10"
                    Opacity="0.7"
                    IsVisible="{Binding HasWorkspaceOverflow}"
-                   Text="{Binding WorkspaceOverflowCount, StringFormat=+{0} file lain tidak ditampilkan}" />
+                   Text="{Binding WorkspaceOverflowCount, StringFormat=+{0} more files not shown}" />
       </DockPanel>
     </Border>
 
@@ -192,7 +192,7 @@
         </Button>
       </Grid>
 
-      <Grid DockPanel.Dock="Bottom" Height="40" ColumnDefinitions="*,Auto" Margin="8,0">
+      <Grid DockPanel.Dock="Bottom" Height="40" ColumnDefinitions="*,Auto,Auto" Margin="8,0">
         <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
           <TextBlock Text="{Binding SelectedTabStatus}"
                      FontSize="11"
@@ -203,7 +203,24 @@
                      IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                      TextTrimming="CharacterEllipsis" />
         </StackPanel>
-        <ToggleSwitch Grid.Column="1"
+        <!-- Resource readouts, app-level above per-tab. CPU and memory are
+             process-wide facts — one process, every tab shares it — so they cannot
+             be split per tab; the read rate and buffer memory below them are the
+             tab on screen's own share. -->
+        <StackPanel Grid.Column="1"
+                    VerticalAlignment="Center"
+                    Spacing="2"
+                    Margin="8,0">
+          <TextBlock Text="{Binding AppResourceText}"
+                     FontSize="10"
+                     Opacity="0.7"
+                     HorizontalAlignment="Right" />
+          <TextBlock Text="{Binding TabResourceText}"
+                     FontSize="10"
+                     Opacity="0.7"
+                     HorizontalAlignment="Right" />
+        </StackPanel>
+        <ToggleSwitch Grid.Column="2"
                       IsChecked="{Binding AutoScroll, Mode=TwoWay}"
                       OnContent="Auto-scroll"
                       OffContent="Auto-scroll"
@@ -258,12 +275,12 @@
                            Opacity="0.6"
                            TextAlignment="Center"
                            TextWrapping="Wrap" />
-                <TextBlock Text="Klik file di sidebar untuk melihat lognya di tab ini"
+                <TextBlock Text="Click a file in the sidebar to view its logs in this tab"
                            FontSize="12"
                            Opacity="0.7"
                            TextAlignment="Center"
                            Margin="0,6,0,0" />
-                <TextBlock Text="Klik 2x untuk membuka sebagai tab sendiri"
+                <TextBlock Text="Double-click to open it as its own tab"
                            FontSize="11"
                            Opacity="0.55"
                            TextAlignment="Center" />

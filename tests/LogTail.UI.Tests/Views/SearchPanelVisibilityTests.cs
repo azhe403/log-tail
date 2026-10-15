@@ -24,6 +24,7 @@ public sealed class SearchPanelVisibilityTests : IDisposable
             typeof(ReactiveUI.IActivationForViewFetcher));
     }
 
+    private readonly List<MainWindowViewModel> _created = new();
     private readonly string _tempDir;
 
     public SearchPanelVisibilityTests()
@@ -34,6 +35,11 @@ public sealed class SearchPanelVisibilityTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var vm in _created)
+        {
+            vm.Dispose();
+        }
+
         if (Directory.Exists(_tempDir))
         {
             Directory.Delete(_tempDir, recursive: true);
@@ -94,6 +100,7 @@ public sealed class SearchPanelVisibilityTests : IDisposable
         // throws ArgumentException in headless tests.
         var window = new MainWindow(settings, logger);
         var vm = new MainWindowViewModel(settings, new LogSourceFactory(logger));
+        _created.Add(vm);
         window.DataContext = vm;
 
         return (window, vm);

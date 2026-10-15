@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using FluentAssertions;
+using LogTail.Core.Diagnostics;
 using LogTail.Core.Models;
 using LogTail.Core.Sources;
 using Avalonia.Controls;
@@ -19,6 +20,7 @@ namespace LogTail.UI.Tests;
 [Collection("MainWindowViewModelTests")]
 public sealed class MainWindowViewModelTests : IDisposable
 {
+    private readonly List<MainWindowViewModel> _created = new();
     private readonly string _tempDir;
 
     public MainWindowViewModelTests()
@@ -29,6 +31,13 @@ public sealed class MainWindowViewModelTests : IDisposable
 
     public void Dispose()
     {
+        // Every window model owns a one-second subscription; without disposal they
+        // accumulate across the run and starve the dispatcher the tests pump.
+        foreach (var vm in _created)
+        {
+            vm.Dispose();
+        }
+
         if (Directory.Exists(_tempDir))
         {
             Directory.Delete(_tempDir, recursive: true);
@@ -229,6 +238,180 @@ public sealed class MainWindowViewModelTests : IDisposable
         sut.SelectedTabStatus.Should().Contain("—");
         // No double-pipe gap should appear in the rendered string.
         sut.SelectedTabStatus.Should().NotContain("|  |");
+    }
+
+    [AvaloniaFact]
+    public void AppResourceText_WhenWindowOpens_ShowsCpuAndMemory()
+    {
+        var sut = CreateViewModel();
+
+        sut.AppResourceText.Should().StartWith("CPU ");
+        sut.AppResourceText.Should().Contain("RAM ");
+    }
+
+    [AvaloniaFact]
+    public void AppResourceText_WhenSamplerReturnsFixedReadings_FormatsThemExactly()
+    {
+        // 7% of total capacity and exactly 100 MB: "0.#" leaves whole numbers
+        // whole, so the composed string can be asserted verbatim rather than by
+        // pattern — which is what injecting the sampler buys.
+        var sampler = new FakeResourceSampler(new ResourceUsage(7, 100L * 1024 * 1024));
+        var sut = CreateViewModel(resourceSampler: sampler);
+
+        sut.AppResourceText.Should().Be("CPU 7% · RAM 100 MB");
+    }
+
+    [AvaloniaFact]
+    public void TabResourceText_WhenNoTabSelected_ShowsPlaceholders()
+    {
+        var sut = CreateViewModel();
+
+        sut.TabResourceText.Should().Be("Read — · buf —");
+    }
+
+    [AvaloniaFact]
+    public void TabResourceText_WhenTabSelected_ShowsReadRateAndBuffer()
+    {
+        var factory = new RecordingSourceFactory();
+        var sut = CreateViewModel(factory);
+        sut.AddTab(CreateLogFile("res.log"));
+        RenderFirstLine(factory);
+
+        sut.SampleResourcesNow();
+
+        sut.TabResourceText.Should().StartWith("Read ");
+        sut.TabResourceText.Should().Contain("buf ~");
+    }
+
+    [AvaloniaFact]
+    public void SampleResourcesNow_WhenTabSwitches_MeasuresOnlyTheNewFilesGrowth()
+    {
+        // The baseline must follow the tab: carrying the previous file's size over
+        // would charge its whole size to one second of reading the new file.
+        var factory = new RecordingSourceFactory();
+        var sut = CreateViewModel(factory);
+        sut.AddTab(CreateLogFile("rate-a.log"));
+        RenderFirstLine(factory);
+        var first = sut.Tabs[0];
+
+        sut.AddTab(CreateLogFile("rate-b.log"));
+        // Wait for the tail to actually start on the new tab: a tab that is not
+        // being read yet has no rate to measure.
+        PumpUntil(() => ReferenceEquals(sut.SelectedTab, sut.Tabs[1]) && sut.SelectedTab!.IsTailing);
+        var second = sut.SelectedTab!;
+
+        // The first reading on the new tab takes its baseline.
+        sut.SampleResourcesNow();
+        second.ReadBytesPerSecond.Should().Be(0);
+
+        // Only the new file's growth counts as reading.
+        second.FileSize += 5_000;
+        sut.SampleResourcesNow();
+
+        second.ReadBytesPerSecond.Should().Be(5_000);
+    }
+
+    [AvaloniaFact]
+    public void SampleResourcesNow_WhenSwitchingAway_ZeroesThePreviousTabsReadRate()
+    {
+        var factory = new RecordingSourceFactory();
+        var sut = CreateViewModel(factory);
+        sut.AddTab(CreateLogFile("stale-a.log"));
+        RenderFirstLine(factory);
+        var first = sut.SelectedTab!;
+
+        // Take the baseline reading on this tab first: a rate needs two samples.
+        sut.SampleResourcesNow();
+        first.ReadBytesPerSecond.Should().Be(0);
+
+        // Give the first tab a live reading.
+        first.FileSize += 2_000;
+        sut.SampleResourcesNow();
+        first.ReadBytesPerSecond.Should().Be(2_000);
+
+        // Switching away must clear it: the tab is no longer being read, and its
+        // tooltip would otherwise keep reporting a rate that stopped being true.
+        sut.AddTab(CreateLogFile("stale-b.log"));
+        PumpUntil(() => !ReferenceEquals(sut.SelectedTab, first));
+        sut.SampleResourcesNow();
+
+        first.ReadBytesPerSecond.Should().Be(0);
+    }
+
+    [AvaloniaFact]
+    public async Task SampleResourcesNow_WhenTabRetargeted_DoesNotChargeTheNewFilesSizeToOneSecond()
+    {
+        // The sidebar re-stats FileSize to the new file's full length on the same
+        // tab instance, so a baseline keyed on tab identity alone reports that
+        // whole file as one second of reading.
+        var factory = new RecordingSourceFactory();
+        var sut = CreateViewModel(factory);
+        sut.AddTab(CreateLogFile("retarget-a.log"));
+        RenderFirstLine(factory);
+        var tab = sut.SelectedTab!;
+
+        // Baseline on the first file.
+        sut.SampleResourcesNow();
+        tab.ReadBytesPerSecond.Should().Be(0);
+
+        // Retarget the same tab at a much larger file.
+        var secondPath = Path.Combine(_tempDir, "retarget-b.log");
+        File.WriteAllText(secondPath, new string('b', 50_000));
+        await sut.ShowWorkspaceFileAsync(secondPath);
+        PumpUntil(() => tab.FilePath == secondPath);
+
+        sut.SampleResourcesNow();
+
+        // The new file's whole size is the baseline, not one second of reading.
+        tab.ReadBytesPerSecond.Should().Be(0);
+        sut.TabResourceText.Should().NotContain("50 KB/s");
+
+        // Only genuine growth after the retarget counts.
+        tab.FileSize += 5_000;
+        sut.SampleResourcesNow();
+
+        tab.ReadBytesPerSecond.Should().Be(5_000);
+    }
+
+    [AvaloniaFact]
+    public void SwitchingTabs_MarksTheTabYouLeftAsNoLongerTailing()
+    {
+        // StopCurrentSourceAsync used to clear SelectedTab.IsTailing, but SelectedTab
+        // already pointed at the new tab by then — so the tab left behind kept
+        // IsTailing true and its tooltip claimed "Read 0 B/s" instead of "Idle".
+        var factory = new RecordingSourceFactory();
+        var sut = CreateViewModel(factory);
+        sut.AddTab(CreateLogFile("left-behind.log"));
+        RenderFirstLine(factory);
+        var first = sut.SelectedTab!;
+
+        sut.AddTab(CreateLogFile("next-up.log"));
+        PumpUntil(() => sut.SelectedTab!.IsTailing);
+
+        first.IsTailing.Should().BeFalse();
+        first.ReadRateText.Should().Be("Idle");
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_LoadsWithResourceReadoutAndTabTooltipBound()
+    {
+        // Guards the status-bar readout bindings and the tab item template:
+        // compiled bindings fail at load time, so loading the view with a tab open
+        // proves the new wiring resolves.
+        Splat.Locator.CurrentMutable.Register(
+            () => new Avalonia.ReactiveUI.AvaloniaActivationForViewFetcher(),
+            typeof(ReactiveUI.IActivationForViewFetcher));
+
+        var factory = new RecordingSourceFactory();
+        var vm = CreateViewModel(factory);
+        vm.AddTab(CreateLogFile("res-xaml.log"));
+        RenderFirstLine(factory);
+        vm.SampleResourcesNow();
+
+        var window = new MainWindow { DataContext = vm };
+        window.Content.Should().NotBeNull();
+
+        window.Close();
     }
 
     [AvaloniaFact]
@@ -447,13 +630,15 @@ public sealed class MainWindowViewModelTests : IDisposable
         return false;
     }
 
-    private MainWindowViewModel CreateViewModel(ILogSourceFactory? sourceFactory = null)
+    private MainWindowViewModel CreateViewModel(ILogSourceFactory? sourceFactory = null, IProcessResourceSampler? resourceSampler = null)
     {
         var logger = new LogTail.Core.Logging.ConsoleLogger();
         var settings = new Core.Persistence.SettingsStore(_tempDir, logger);
         sourceFactory ??= new LogSourceFactory(logger);
 
-        return new MainWindowViewModel(settings, sourceFactory);
+        var vm = new MainWindowViewModel(settings, sourceFactory, resourceSampler: resourceSampler);
+        _created.Add(vm);
+        return vm;
     }
 
     private string CreateLogFile(string name = "test.log")
@@ -694,7 +879,7 @@ public sealed class MainWindowViewModelTests : IDisposable
     [AvaloniaFact]
     public void HasWorkspaceOverflow_WhenTheFolderFitsTheCap_IsFalse()
     {
-        // The "N file lain tidak ditampilkan" footer must stay hidden unless
+        // The "N more files not shown" footer must stay hidden unless
         // files were actually left out.
         var sut = CreateViewModel();
         sut.OpenFolderTab(CreateWorkspace("ws-small"));
@@ -1166,6 +1351,49 @@ public sealed class MainWindowViewModelTests : IDisposable
         private readonly Queue<ILogSource> _sources = new(sources);
 
         public ILogSource CreateFileSource(string filePath, int initialWindowBytes, int maxWindowBytes, int tailLineLimit) => _sources.Dequeue();
+    }
+
+    /// <summary>
+    /// Hands out a fresh controllable source per call, so a test can drive its
+    /// events without tailing a real file. A real source carries a timer, a file
+    /// watcher and a read loop for every tab opened, and those accumulate across a
+    /// long test run.
+    /// </summary>
+    private sealed class RecordingSourceFactory : ILogSourceFactory
+    {
+        public List<ControllableLogSource> Created { get; } = new();
+
+        public ILogSource CreateFileSource(string filePath, int initialWindowBytes, int maxWindowBytes, int tailLineLimit)
+        {
+            var source = new ControllableLogSource();
+            Created.Add(source);
+            return source;
+        }
+    }
+
+    /// <summary>
+    /// Makes the source the window just started render a line, so the tab has
+    /// content without any real file I/O behind it.
+    /// </summary>
+    private static void RenderFirstLine(RecordingSourceFactory factory)
+    {
+        PumpUntil(() => factory.Created.Count > 0);
+        var source = factory.Created[^1];
+        source.Emit("rendered line");
+        Thread.Sleep(300);
+        source.CompleteInitialLoad();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>
+    /// Hands out fixed readings so the composed status strings can be asserted
+    /// exactly; the last reading repeats once the list runs out.
+    /// </summary>
+    private sealed class FakeResourceSampler(params ResourceUsage[] readings) : IProcessResourceSampler
+    {
+        private int _index;
+
+        public ResourceUsage Sample() => readings[Math.Min(_index++, readings.Length - 1)];
     }
 
     private sealed class ControllableLogSource : ILogSource

@@ -17,12 +17,12 @@
                 HorizontalAlignment="Left" />
     </StackPanel>
     <StackPanel Spacing="6">
-      <TextBlock Text="Posisi sidebar folder" FontWeight="SemiBold" />
+      <TextBlock Text="Sidebar folder position" FontWeight="SemiBold" />
       <ComboBox ItemsSource="{Binding SidebarPositionOptions}"
                 SelectedItem="{Binding SidebarPosition, Mode=TwoWay}"
                 Width="200"
                 HorizontalAlignment="Left"
-                ToolTip.Tip="Atur sidebar folder di kiri atau kanan" />
+                ToolTip.Tip="Set the sidebar folder position to left or right" />
     </StackPanel>
     <CheckBox Content="Reopen last session on startup"
               IsChecked="{Binding RestoreLastSession, Mode=TwoWay}" />

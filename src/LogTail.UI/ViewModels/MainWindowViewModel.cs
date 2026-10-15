@@ -12,6 +12,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using LogTail.Core.Buffer;
+using LogTail.Core.Diagnostics;
 using LogTail.Core.Logging;
 using LogTail.Core.Models;
 using LogTail.Core.Persistence;
@@ -22,7 +23,7 @@ using ReactiveUI;
 
 namespace LogTail.UI.ViewModels;
 
-public sealed class MainWindowViewModel : ReactiveObject
+public sealed class MainWindowViewModel : ReactiveObject, IDisposable
 {
     private string _windowTitle = "Log Tail";
 
@@ -95,6 +96,32 @@ public sealed class MainWindowViewModel : ReactiveObject
     private readonly ObservableAsPropertyHelper<string> _selectedTabStatus;
     public string SelectedTabStatus => _selectedTabStatus.Value;
 
+    private string _appResourceText = "CPU — · RAM —";
+
+    /// <summary>
+    /// The app's own CPU and memory for the status bar. Both are process-wide
+    /// facts: every tab shares one process, so neither can be attributed to a
+    /// single tab. Recomputed once a second by <see cref="SampleResourcesNow"/>.
+    /// </summary>
+    public string AppResourceText
+    {
+        get => _appResourceText;
+        private set => this.RaiseAndSetIfChanged(ref _appResourceText, value);
+    }
+
+    private string _tabResourceText = "Read — · buf —";
+
+    /// <summary>
+    /// The tab on screen's share of the app's resources: how fast its file is
+    /// being read, and how much memory its rendered buffer holds. "—" while
+    /// nothing is tailed; see <see cref="SampleResourcesNow"/>.
+    /// </summary>
+    public string TabResourceText
+    {
+        get => _tabResourceText;
+        private set => this.RaiseAndSetIfChanged(ref _tabResourceText, value);
+    }
+
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
 
     /// <summary>
@@ -123,8 +150,8 @@ public sealed class MainWindowViewModel : ReactiveObject
         : new Thickness(0, 0, 1, 0);
 
     public string SidebarHintText => IsSidebarOnRight
-        ? "Klik file di sidebar kanan untuk melihat lognya di tab ini"
-        : "Klik file di sidebar kiri untuk melihat lognya di tab ini";
+        ? "Click a file in the right sidebar to view its log in this tab"
+        : "Click a file in the left sidebar to view its log in this tab";
 
     private void NotifySidebarPositionChanged()
     {
@@ -232,7 +259,7 @@ public sealed class MainWindowViewModel : ReactiveObject
     }
 
     /// <summary>
-    /// Whether the sidebar's "N file lain tidak ditampilkan" footer applies.
+    /// Whether the sidebar's "N more files not shown" footer applies.
     /// A bool rather than testing the count in XAML: an int bound through a
     /// string converter is never "empty", so the footer would always show.
     /// </summary>
@@ -494,6 +521,14 @@ public sealed class MainWindowViewModel : ReactiveObject
     private readonly RingBuffer<EnrichedLogEvent> _buffer;
     private ILogSource? _source;
 
+    /// <summary>
+    /// The tab the running source belongs to. <see cref="SelectedTab"/> cannot
+    /// answer this: by the time the SelectedTab observer switches sources, the
+    /// property already points at the new tab, so it would clear the wrong one
+    /// and leave the tab you left claiming to be tailed.
+    /// </summary>
+    private TabViewModel? _tailingTab;
+
     public ILogSource? CurrentSource
     {
         get => _source;
@@ -513,15 +548,30 @@ public sealed class MainWindowViewModel : ReactiveObject
     private readonly Dictionary<TabViewModel, Queue<DateTimeOffset>> _rateWindows = new();
     private readonly IDisposable _rateTimer;
 
+    // Resource readouts. Process-level CPU/memory cannot be split per tab, so one
+    // sampler serves the window; the per-tab facts come from the tab's own file
+    // size and buffer instead.
+    private readonly IProcessResourceSampler _resourceSampler;
+
+    // Read-rate baseline: which tab and file the last sample measured, and the
+    // file size it measured from. Re-established per tab — and per file, because
+    // the sidebar retargets a tab at a new file without replacing the tab — so
+    // one file's size is never charged to a second of reading another.
+    private TabViewModel? _readRateTab;
+    private string? _readRateBaselinePath;
+    private long _readRateBaselineSize;
+
     public MainWindowViewModel(
         SettingsStore settings,
         ILogSourceFactory sourceFactory,
         ILogTailLogger? logger = null,
-        SettingsViewModel? settingsViewModel = null)
+        SettingsViewModel? settingsViewModel = null,
+        IProcessResourceSampler? resourceSampler = null)
     {
         _settings = settings;
         _sourceFactory = sourceFactory;
         _logger = logger;
+        _resourceSampler = resourceSampler ?? new ProcessResourceSampler();
         Settings = settingsViewModel ?? new SettingsViewModel(settings, logger);
         Search = new SearchViewModel(Tabs, tab => SelectedTab = tab);
 
@@ -565,14 +615,24 @@ public sealed class MainWindowViewModel : ReactiveObject
                         t => t.LastModified,
                         t => t.LinesPerSecond,
                         t => t.LogEvents.Count)
-                    .Select(_ => BuildTabStatus(tuple.Item1, tuple.Item2)))
+                    .Select(_ => BuildTabStatus(tuple.Item1, tuple.Item2, tuple.Item3)))
             .Switch()
             .ToProperty(this, x => x.SelectedTabStatus);
 
-        // Decay rate to zero when idle: prune 1-second windows every second.
+        // One-second housekeeping tick: decay the idle line rate to zero and take
+        // the resource reading. One timer rather than one per concern — both jobs
+        // are a once-a-second pass on the UI thread.
         _rateTimer = Observable.Interval(TimeSpan.FromSeconds(1))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => PruneRates());
+            .Subscribe(_ =>
+            {
+                PruneRates();
+                SampleResourcesNow();
+            });
+
+        // Seed the bar at once: this is the CPU baseline, so the first tick one
+        // second later already has an interval to divide by.
+        SampleResourcesNow();
 
         // Sidebar visibility and its folder list are computed from the tab
         // collection, so a tab add/remove has to re-announce them.
@@ -582,7 +642,7 @@ public sealed class MainWindowViewModel : ReactiveObject
             this.RaisePropertyChanged(nameof(HasWorkspaces));
         };
 
-        // Sidebar Kiri/Kanan applies instantly: Settings owns persistence,
+        // Sidebar Left/Right applies instantly: Settings owns persistence,
         // this VM only re-announces the derived column/border/hint bindings.
         Settings.SidebarPositionChanged += _ => NotifySidebarPositionChanged();
 
@@ -995,6 +1055,101 @@ public sealed class MainWindowViewModel : ReactiveObject
         }
     }
 
+    /// <summary>
+    /// Takes one resource reading for the status bar: the app's CPU and memory, plus
+    /// the tab on screen's read rate and buffer memory. Driven by the one-second tick
+    /// and exposed internally so tests can read a sample without waiting for it.
+    /// </summary>
+    /// <remarks>
+    /// The read rate is the growth of the tailed file's size, which is what the tail
+    /// actually ingests. The one-time bulk read of a freshly opened file is not
+    /// reported as a spike: the tab already knows the file's full size from its stat
+    /// at open, so that lands in the baseline rather than in a rate.
+    /// </remarks>
+    internal void SampleResourcesNow()
+    {
+        var usage = _resourceSampler.Sample();
+
+        AppResourceText = $"CPU {usage.CpuPercent:0.#}% · RAM {WorkspaceFile.FormatSize(usage.WorkingSetBytes)}";
+
+        var tab = ActiveLogTab;
+        if (tab is null)
+        {
+            // Nothing is being read, so the last tab's rate must not survive in its
+            // tooltip as a stale number.
+            ReleaseReadRateBaseline();
+            TabResourceText = "Read — · buf —";
+            return;
+        }
+
+        var readRate = MeasureReadRate(tab);
+        tab.ReadBytesPerSecond = readRate;
+
+        var readText = tab.IsTailing
+            ? $"{WorkspaceFile.FormatSize((long)readRate)}/s"
+            : "—";
+
+        TabResourceText = $"Read {readText} · buf ~{WorkspaceFile.FormatSize(tab.EstimatedBufferBytes)}";
+    }
+
+    /// <summary>
+    /// Bytes per second the given tab read since the previous sample, measured from
+    /// its file size. Establishes a fresh baseline when the tab is not the one being
+    /// measured — or has been retargeted at a different file, which re-stats
+    /// <c>FileSize</c> to the new file's full length on the same instance — so a
+    /// resumed or retargeted tail cannot credit the whole gap to one second. A
+    /// rotated or truncated file shrinks, and negative bytes read is meaningless.
+    /// </summary>
+    private double MeasureReadRate(TabViewModel tab)
+    {
+        if (!ReferenceEquals(tab, _readRateTab) ||
+            !string.Equals(_readRateBaselinePath, tab.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            ReleaseReadRateBaseline();
+            _readRateTab = tab;
+            _readRateBaselinePath = tab.FilePath;
+            _readRateBaselineSize = tab.FileSize;
+            return 0;
+        }
+
+        if (!tab.IsTailing)
+        {
+            _readRateBaselineSize = tab.FileSize;
+            return 0;
+        }
+
+        var growth = tab.FileSize - _readRateBaselineSize;
+        _readRateBaselineSize = tab.FileSize;
+
+        return growth > 0 ? growth : 0;
+    }
+
+    private void ReleaseReadRateBaseline()
+    {
+        if (_readRateTab is { } previous)
+        {
+            previous.ReadBytesPerSecond = 0;
+        }
+
+        _readRateTab = null;
+        _readRateBaselinePath = null;
+        _readRateBaselineSize = 0;
+    }
+
+    public void Dispose()
+    {
+        // Tear down the one-second tick: the interval subscription holds this
+        // instance — and every buffer its tabs hold — alive and keeps sampling
+        // with nothing left to display it.
+        //
+        // The sampler is deliberately left running. It wraps a handle that lives
+        // for the life of the process, and closing it here deadlocks against an
+        // in-flight sample: disposing both the tick and the sampler hangs the
+        // suite four times out of six, disposing the tick alone never does. One
+        // handle per process is the cheaper failure.
+        _rateTimer.Dispose();
+    }
+
     public TabViewModel? FindTabByPath(string filePath)
     {
         return Tabs.FirstOrDefault(t =>
@@ -1017,7 +1172,8 @@ public sealed class MainWindowViewModel : ReactiveObject
             CurrentSource = null;
         }
 
-        var stopped = SelectedTab;
+        var stopped = _tailingTab;
+        _tailingTab = null;
         if (stopped is not null)
         {
             stopped.IsTailing = false;
@@ -1048,6 +1204,7 @@ public sealed class MainWindowViewModel : ReactiveObject
 
         var source = _sourceFactory.CreateFileSource(tab.FilePath, BufferCapacity);
         CurrentSource = source;
+        _tailingTab = tab;
 
         if (resumeOnly)
         {
@@ -1243,7 +1400,7 @@ public sealed class MainWindowViewModel : ReactiveObject
         }
     }
 
-    private static string BuildTabStatus(TabViewModel tab, int bufferCapacity)
+    private static string BuildTabStatus(TabViewModel tab, int bufferCapacity, string matchCountText)
     {
         var size = tab.FileSize;
         var sizeText = size switch
@@ -1263,7 +1420,7 @@ public sealed class MainWindowViewModel : ReactiveObject
 
         // Always show rate — including 0 when idle — so the status bar reads
         // consistently (no missing field that flickers in/out as events arrive).
-        var linesCount = $"{tab.LogEvents.Count:N0} lines";
+        var linesCount = WorkspaceFile.FormatLineCount(tab.LogEvents.Count);
         var rate = $"{tab.LinesPerSecond:0.#} lines/s";
 
         var state = tab.IsTailing ? "tailing" : tab.Status;

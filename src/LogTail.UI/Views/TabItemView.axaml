@@ -14,6 +14,22 @@
                 Padding="2,0"
                 Command="{Binding $parent[TabControl].((vm:MainWindowViewModel)DataContext).CloseTabCommand}"
                 CommandParameter="{Binding}" />
+        <!-- Per-tab resource facts. Bound through LogSource so a folder tab reports
+             the file it is previewing rather than the folder's own empty buffer.
+             The tab strip itself stays uncluttered — these are one hover away. -->
+        <ToolTip.Tip>
+            <ToolTip>
+                <StackPanel Spacing="2" MaxWidth="520">
+                    <TextBlock Text="{Binding LogSource.FilePath}" FontSize="11" />
+                    <TextBlock Text="{Binding LogSource.BufferFactsText}"
+                               FontSize="11"
+                               Opacity="0.7" />
+                    <TextBlock Text="{Binding LogSource.ReadRateText}"
+                               FontSize="11"
+                               Opacity="0.7" />
+                </StackPanel>
+            </ToolTip>
+        </ToolTip.Tip>
     </StackPanel>
     
 </UserControl>

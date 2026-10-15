@@ -165,6 +165,15 @@ public sealed class WorkspaceFileScannerTests : IDisposable
     }
 
     [Fact]
+    public void FormatLineCount_SingularForOneAndGroupedBeyondThat()
+    {
+        WorkspaceFile.FormatLineCount(0).Should().Be("0 lines");
+        WorkspaceFile.FormatLineCount(1).Should().Be("1 line");
+        WorkspaceFile.FormatLineCount(2).Should().Be("2 lines");
+        WorkspaceFile.FormatLineCount(12345).Should().Be("12,345 lines");
+    }
+
+    [Fact]
     public void OrderFiles_SortsByNameAscendingAndDescending()
     {
         var files = new[]

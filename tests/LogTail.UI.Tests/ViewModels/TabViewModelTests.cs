@@ -213,4 +213,78 @@ public class TabViewModelTests
         vm.LastModified.Should().Be(default);
         vm.IsTailing.Should().BeFalse();
     }
+
+    [Fact]
+    public void EstimatedBufferBytes_WhenNoLinesHeld_IsZero()
+    {
+        var vm = new TabViewModel("/path/to/file.log");
+
+        vm.EstimatedBufferBytes.Should().Be(0);
+    }
+
+    [Fact]
+    public void EstimatedBufferBytes_WhenLinesHeld_GrowsWithTheirLength()
+    {
+        var vm = new TabViewModel("/path/to/file.log");
+        vm.AddLogEvent(EventOf(new string('x', 1000)));
+
+        var estimate = vm.EstimatedBufferBytes;
+
+        // 2 bytes per character of the rendered line, plus the per-event overhead.
+        estimate.Should().BeGreaterThan(2_000);
+    }
+
+    [Fact]
+    public void EstimatedBufferBytes_WhenLinesEvicted_ShrinksWithThem()
+    {
+        var vm = new TabViewModel("/path/to/file.log");
+        var batch = new List<EnrichedLogEvent>();
+        for (var i = 0; i < 100; i++)
+        {
+            batch.Add(EventOf(new string('y', 500)));
+        }
+
+        vm.AddLogEvents(batch);
+        var full = vm.EstimatedBufferBytes;
+        vm.EvictFromFront(50);
+
+        vm.EstimatedBufferBytes.Should().BeLessThan(full);
+    }
+
+    [Fact]
+    public void BufferFactsText_WhenLinesHeld_ReportsCountAndEstimatedSize()
+    {
+        var vm = new TabViewModel("/path/to/file.log");
+        vm.AddLogEvent(EventOf(new string('x', 1000)));
+
+        vm.BufferFactsText.Should().Be("1 line · ~2.1 KB held");
+    }
+
+    [Fact]
+    public void ReadRateText_WhenNotTailing_SaysIdle()
+    {
+        // A background tab must not keep a rate that stopped being true when it
+        // left the screen.
+        var vm = new TabViewModel("/path/to/file.log");
+        vm.ReadBytesPerSecond = 5_000;
+
+        vm.ReadRateText.Should().Be("Idle");
+    }
+
+    [Fact]
+    public void ReadRateText_WhenTailing_ReportsBytesPerSecond()
+    {
+        var vm = new TabViewModel("/path/to/file.log");
+        vm.IsTailing = true;
+        vm.ReadBytesPerSecond = 2_500_000;
+
+        vm.ReadRateText.Should().Be("Read 2.4 MB/s");
+    }
+
+    private static EnrichedLogEvent EventOf(string line) =>
+        new(
+            new RawLogEvent(DateTimeOffset.UtcNow, "test", 0, line),
+            LogLevel.Info,
+            DateTimeOffset.Now,
+            null);
 }
