@@ -64,6 +64,7 @@ public sealed class SessionTracker : IDisposable
         var files = new List<string>();
         var folders = new List<string>();
         var sorts = new List<WorkspaceSortState>();
+        var previews = new List<string?>();
         foreach (var tab in _tabs)
         {
             if (tab.IsFolder)
@@ -73,6 +74,7 @@ public sealed class SessionTracker : IDisposable
                     tab.FilePath,
                     tab.WorkspaceSortCriterion,
                     tab.WorkspaceSortDirection));
+                previews.Add(tab.Preview?.FilePath);
             }
             else
             {
@@ -86,10 +88,23 @@ public sealed class SessionTracker : IDisposable
         }
 
         var selected = _currentSelected;
-        var activeFile = selected is { IsFolder: false } ? selected.FilePath : null;
+        var activeFile = selected is { IsFolder: true }
+            ? selected.Preview?.FilePath
+            : (selected is null ? null : selected.FilePath);
         var activeFolder = selected is { IsFolder: true } ? selected.FilePath : null;
+        var activePreview = selected is { IsFolder: true } ? selected.Preview?.FilePath : null;
 
-        _store.Save(new SessionState(files, activeFile, folders, activeFolder, sorts));
+        var previewList = previews.Select(p => p).ToList();
+        _store.Save(new SessionState(
+            files,
+            activeFile,
+            folders,
+            activeFolder,
+            sorts,
+            activePreview,
+            previewList!,
+            previewList!,
+            activePreview));
     }
 
     public void Dispose()

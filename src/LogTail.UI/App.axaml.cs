@@ -89,9 +89,11 @@ public partial class App : Application
             // tab switch — a crash before then loses it. Each toggle writes
             // immediately while the tracker is enabled.
             viewModel.WorkspaceSortChanged += tracker.SaveNow;
+            viewModel.WorkspacePreviewChanged += tracker.SaveNow;
             desktop.Exit += (_, _) =>
             {
                 viewModel.WorkspaceSortChanged -= tracker.SaveNow;
+                viewModel.WorkspacePreviewChanged -= tracker.SaveNow;
                 viewModel.Dispose();
                 tracker.Dispose();
             };
@@ -147,7 +149,9 @@ public partial class App : Application
         // active one is re-selected below once the log tabs exist.
         if (session.WorkspaceFolders is { Count: > 0 })
         {
-            viewModel.RestoreWorkspaces(session.WorkspaceFolders);
+            viewModel.RestoreWorkspaces(
+                session.WorkspaceFolders,
+                session.WorkspacePreviewFiles ?? session.PreviewFiles);
             ApplyWorkspaceSorts(viewModel, session.WorkspaceSorts);
         }
 
@@ -186,6 +190,14 @@ public partial class App : Application
             if (folderTab is not null)
             {
                 viewModel.SelectedTab = folderTab;
+
+                // Remember the last file opened inside this folder so the
+                // preview (and its tail) comes back instead of the summary.
+                var previewPath = session.ActivePreview ?? session.ActiveFile ?? session.LastOpenedFile;
+                if (!string.IsNullOrWhiteSpace(previewPath) && File.Exists(previewPath))
+                {
+                    _ = viewModel.ShowWorkspaceFileAsync(previewPath);
+                }
             }
         }
 

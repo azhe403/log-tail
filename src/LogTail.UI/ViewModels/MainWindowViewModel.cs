@@ -223,6 +223,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
     }
 
     public event Action? WorkspaceSortChanged;
+    public event Action? WorkspacePreviewChanged;
 
     public void ToggleWorkspaceSort(WorkspaceSortCriterion criterion)
     {
@@ -378,6 +379,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         {
             StartWorkspaceWatcher(folder.FilePath, folder);
         }
+
+        // Re-open the last file previewed in this folder, if any, so coming
+        // back to a folder tab does not drop the user on the summary.
+        if (folder.Preview is null &&
+            _folderPreviewPaths.TryGetValue(folder.FilePath, out var remembered) &&
+            !string.IsNullOrWhiteSpace(remembered))
+        {
+            _ = ShowWorkspaceFileAsync(remembered);
+        }
     }
 
     private void ClearWorkspaceFiles()
@@ -438,6 +448,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
                     if (selected is not null)
                     {
                         this.RaisePropertyChanged(nameof(SelectedWorkspaceFile));
+                    }
+                    else if (SelectedTab is { IsFolder: true } folder && folder.Preview is { } preview)
+                    {
+                        UpdateSelectedWorkspaceFile(preview.FilePath);
                     }
 
                     StatusMessage = result.Error ?? $"Workspace: {folder.FileName}";
@@ -736,6 +750,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
 
     private WorkspaceFile? _selectedWorkspaceFile;
 
+    private void UpdateSelectedWorkspaceFile(string fullPath)
+    {
+        var match = WorkspaceFiles.FirstOrDefault(f =>
+            string.Equals(f.Path, fullPath, StringComparison.OrdinalIgnoreCase));
+        if (match is not null && !ReferenceEquals(_selectedWorkspaceFile, match))
+        {
+            _selectedWorkspaceFile = match;
+            this.RaisePropertyChanged(nameof(SelectedWorkspaceFile));
+        }
+    }
+
     /// <summary>
     /// The file highlighted in the sidebar. Setting it shows the file, so a
     /// single click navigates through the VM however the selection arrived —
@@ -791,6 +816,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             if (folder.Preview is { } existing &&
                 string.Equals(existing.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
             {
+                _folderPreviewPaths[folder.FilePath] = fullPath;
+                WorkspacePreviewChanged?.Invoke();
+                UpdateSelectedWorkspaceFile(fullPath);
                 return;
             }
 
@@ -808,6 +836,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             }
 
             folder.SetPreview(preview);
+            _folderPreviewPaths[folder.FilePath] = fullPath;
+            WorkspacePreviewChanged?.Invoke();
             SyncActiveLogTab();
             LoadWorkspaceFor(folder);
 
@@ -817,6 +847,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             // stopped, so switching large files in folder mode does not keep
             // every previously previewed file's buffer alive.
             replaced?.ClearEvents();
+
+            UpdateSelectedWorkspaceFile(fullPath);
             return;
         }
 
@@ -952,28 +984,52 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         SelectedTab = tab;
     }
 
+    private readonly Dictionary<string, string> _folderPreviewPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Re-opens saved workspace folders. Folders that no longer exist are
     /// skipped silently; the stale entry disappears on the next save.
     /// Does not select anything — <see cref="RestoreTabs"/> picks the active
     /// tab afterwards.
     /// </summary>
-    public void RestoreWorkspaces(IReadOnlyList<string> folderPaths)
+    public void RestoreWorkspaces(IReadOnlyList<string> folderPaths) =>
+        RestoreWorkspaces(folderPaths, (IReadOnlyList<string?>?)null);
+
+    public void RestoreWorkspaces(IReadOnlyList<string> folderPaths, string? activePreviewFile)
     {
+        RestoreWorkspaces(folderPaths, (IReadOnlyList<string?>?)null);
+        if (!string.IsNullOrWhiteSpace(activePreviewFile) &&
+            SelectedTab is { IsFolder: true })
+        {
+            _ = ShowWorkspaceFileAsync(activePreviewFile!);
+        }
+    }
+
+    public void RestoreWorkspaces(IReadOnlyList<string> folderPaths, IReadOnlyList<string?>? previewFiles)
+    {
+        var index = 0;
         foreach (var folder in folderPaths)
         {
             if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
             {
+                index++;
                 continue;
             }
 
             var fullPath = Path.GetFullPath(folder);
-            if (Tabs.Any(t => t.IsFolder && string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+            if (!Tabs.Any(t => t.IsFolder && string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
             {
-                continue;
+                Tabs.Add(new TabViewModel(fullPath, isFolder: true));
             }
 
-            Tabs.Add(new TabViewModel(fullPath, isFolder: true));
+            if (previewFiles is not null && index < previewFiles.Count &&
+                !string.IsNullOrWhiteSpace(previewFiles[index]))
+            {
+                _folderPreviewPaths[fullPath] = previewFiles[index]!;
+            }
+
+            index++;
         }
 
         // Otherwise a session that had folders but no surviving log file comes
@@ -982,6 +1038,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         if (SelectedTab is null)
         {
             SelectedTab = Tabs.FirstOrDefault(t => t.IsFolder) ?? Tabs.LastOrDefault();
+        }
+
+        if (SelectedTab is { IsFolder: true } selectedFolder &&
+            _folderPreviewPaths.TryGetValue(selectedFolder.FilePath, out var previewPath) &&
+            !string.IsNullOrWhiteSpace(previewPath))
+        {
+            _ = ShowWorkspaceFileAsync(previewPath);
         }
     }
 
