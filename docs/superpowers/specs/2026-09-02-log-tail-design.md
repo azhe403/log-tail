@@ -1,7 +1,7 @@
 # Log Tail — Design Spec (Milestone 1: Foundation)
 
 Date: 2026-09-02
-Status: Approved (pending written review)
+Status: Implemented
 Scope: Milestone 1 only (foundation: file tail, ring buffer, theme persistence). Milestones 2–5 designed and brainstormed separately.
 
 ## 1. Purpose

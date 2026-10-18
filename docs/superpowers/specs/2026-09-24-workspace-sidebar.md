@@ -1,7 +1,7 @@
 # Workspace Folder Tabs — Drag Folder as a Folder Tab
 
 **Date:** 2026-09-26 (revised; supersedes the 2026-09-24 flat-list sidebar design)
-**Status:** Approved by user
+**Status:** Implemented
 **Scope:** Core (`SessionState`) + UI (`ViewModels`, `MainWindow.axaml`, `MainWindow.axaml.cs`, `App.axaml.cs`)
 
 ## 1. Goal
@@ -25,7 +25,7 @@ Each folder tab owns its workspace. Closing a folder tab drops it from the sideb
 │  app.log     4.2 MB   09-28 20:03                        │
 │  error.log   919 KB   09-24 00:00                          │
 │  access.jsonl 12.4 MB 09-24 08:10                         │
-│ +12 file lain│  log tab active: log lines (unchanged)      │
+│ +12 more     │  log tab active: log lines (unchanged)      │
 └──────────────┴─────────────────────────────────────────────┘
 ```
 
@@ -59,7 +59,7 @@ Mixed drop: every folder becomes its own tab, every file becomes its own log tab
 - Recursive walk from the workspace root, collecting files with extension `.log`, `.txt`, `.jsonl` (case-insensitive). `stdlib` only.
 - **Flat**: folder structure is not shown. Switching folders is what tabs are for; a hierarchy would add a navigation level for nothing.
 - **Sort**: by file name, `OrdinalIgnoreCase`, with the full path breaking ties so two same-named files in different subfolders land in a stable order.
-- **Cap 1000 files per workspace.** Overflow is counted and shown as `+N file lain tidak ditampilkan` at the bottom of the list.
+- **Cap 1000 files per workspace.** Overflow is counted and shown as `+N more files not shown` at the bottom of the list.
 - **Scanning runs off the UI thread.** A directory walk over a large workspace blocks the dispatcher, and a blocked dispatcher means buffered log events never render — the log looks frozen while its source is still tailing. A generation counter drops the result of a scan whose folder the user has already navigated away from.
 
 ## 3. State & Persistence

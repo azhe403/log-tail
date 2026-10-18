@@ -1068,7 +1068,7 @@ Replace the body of `OnFrameworkInitializationCompleted` in `src/LogTail.UI/App.
 
         if (missing.Count > 0)
         {
-            viewModel.StatusMessage = $"{missing.Count} file dari sesi terakhir tidak ditemukan";
+            viewModel.StatusMessage = $"{missing.Count} files from the last session were not found";
         }
     }
 ```

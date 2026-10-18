@@ -1,27 +1,27 @@
 # Session Restore + Settings Window Design
 
 **Date:** 2026-09-11
-**Status:** Draft (pending user review)
+**Status:** Implemented
 **Scope:** Core (`LogTail.Core`), UI (`LogTail.UI`), Core Tests (`LogTail.Core.Tests`), UI Tests (`LogTail.UI.Tests`)
 
 ## Problem
 
-Setiap kali LogTail dijalankan, jendela terbuka kosong dan user harus membuka ulang file log yang sama secara manual. Tab yang sedang dikerjakan pada sesi sebelumnya hilang begitu aplikasi ditutup. Selain itu, preferensi aplikasi tidak punya tempat khusus — Theme hanya bisa diganti lewat menu `View > Theme`, dan tidak ada wadah untuk preferensi lain seperti perilaku startup.
+Every time LogTail is run, the window opens empty and the user has to reopen the same log file manually. Tabs being worked on in the previous session disappear as soon as the app is closed. In addition, app preferences have no dedicated place — Theme can only be changed through the `View > Theme` menu, and there is no container for other preferences such as startup behavior.
 
 ## Goal
 
-1. Saat startup, pulihkan seluruh tab dari sesi terakhir beserta tab yang terakhir aktif.
-2. Jangan hanya bergantung pada file terakhir: jika file dari sesi hilang (dipindah/dihapus/drive belum ter-mount), tab tersebut di-skip tetapi path-nya tetap dipertahankan agar bisa ter-restore pada sesi berikutnya.
-3. Sediakan opsi on/off untuk perilaku restore, **enabled by default**.
-4. Opsi OFF berarti *pause*: berhenti restore dan berhenti menyimpan, tetapi data sesi lama tidak dihapus.
-5. Sediakan jendela Settings yang bisa menampung preferensi (dimulai dari Theme yang pindah dari menu `View`, plus opsi restore), dibuka lewat ikon gear di pojok kanan atas.
-6. Jika LogTail dijalankan dengan file eksplisit, file eksplisit menang dan session restore di-skip.
+1. On startup, restore all tabs from the last session along with the most recently active tab.
+2. Do not rely solely on the last file: if a file from the session is missing (moved/deleted/drive not yet mounted), that tab is skipped but its path is preserved so it can be restored in a later session.
+3. Provide an on/off option for restore behavior, **enabled by default**.
+4. The OFF option means *pause*: stop restoring and stop saving, but old session data is not deleted.
+5. Provide a Settings window that can hold preferences (starting with Theme, moved out of the menu `View`, plus the restore option), opened via the gear icon in the top right corner.
+6. If LogTail is run with an explicit file, the explicit file wins and session restore is skipped.
 
 ## Design
 
-### 1. Model Data & Penyimpanan
+### 1. Data Model & Storage
 
-`AppSettings` (`src/LogTail.Core/Models/AppSettings.cs`) hanya bertambah satu preferensi:
+`AppSettings` (`src/LogTail.Core/Models/AppSettings.cs`) gains a single preference:
 
 ```csharp
 public sealed record AppSettings(
@@ -33,9 +33,9 @@ public sealed record AppSettings(
     bool RestoreLastSession = true);
 ```
 
-`RestoreLastSession` default `true`. Deserialisasi `settings.json` lama yang belum punya field ini tetap menghasilkan nilai default (System.Text.Json memakai default parameter constructor).
+`RestoreLastSession` defaults to `true`. Deserializing an old `settings.json` that does not yet have this field still yields the default value (System.Text.Json uses the default parameter constructor).
 
-State sesi yang bersifat volatil disimpan terpisah di `session.json`, satu folder dengan `settings.json` (yaitu `%LocalAppData%/log-tail/`):
+Volatile session state is stored separately in `session.json`, in the same folder as `settings.json` (namely `%LocalAppData%/log-tail/`):
 
 ```csharp
 // src/LogTail.Core/Models/SessionState.cs
@@ -44,13 +44,13 @@ public sealed record SessionState(
     string? ActiveFile);
 ```
 
-Kelas baru `SessionStore` (`src/LogTail.Core/Persistence/SessionStore.cs`) berbentuk mirror `SettingsStore` (`Load`/`Save`/`Update`), mengembalikan `SessionState` kosong (`Files` kosong, `ActiveFile` null) bila file belum ada atau korup, dan mencatat warning lewat `ILogTailLogger` tanpa crash.
+The new `SessionStore` class (`src/LogTail.Core/Persistence/SessionStore.cs`) mirrors `SettingsStore` (`Load`/`Save`/`Update`), returns an empty `SessionState` (`Files` empty, `ActiveFile` null) if the file does not exist or is corrupt, and logs a warning via `ILogTailLogger` without crashing.
 
-WHY dipisah dari `settings.json`: sesi ditulis setiap perubahan tab. Bila digabung, setiap ganti tab akan menulis ulang Theme/Buffer dan berpotensi balapan tulis dengan perubahan Theme dari jendela Settings. Dua file terpisah berarti dua domain tulis yang independen dan tidak saling menimpa.
+WHY it is separate from `settings.json`: the session is written on every tab change. If merged, every tab switch would rewrite Theme/Buffer and could race with Theme changes from the Settings window. Two separate files mean two independent write domains that do not overwrite each other.
 
-### 2. `SessionTracker` (Orkestrasi Save)
+### 2. `SessionTracker` (Save Orchestration)
 
-Kelas baru `SessionTracker` (`src/LogTail.UI/ViewModels/SessionTracker.cs`, satu tipe per file) dibuat agar `MainWindowViewModel` tidak membengkak:
+The new `SessionTracker` class (`src/LogTail.UI/ViewModels/SessionTracker.cs`, one type per file) is created so that `MainWindowViewModel` does not grow bloated:
 
 ```csharp
 public sealed class SessionTracker : IDisposable
@@ -68,40 +68,40 @@ public sealed class SessionTracker : IDisposable
 }
 ```
 
-Tingkah laku:
+Behavior:
 
-- Subscribe ke `tabs.CollectionChanged` dan perubahan `selectedTab`. Setiap event, jika `IsEnabled`, tulis sesi.
-- `SaveNow()` menyusun `Files` = path tab berurutan **digabung** path *unresolved* yang di-seed (dedup case-insensitive), dan `ActiveFile` = `SelectedTab?.FilePath`.
-- `IsEnabled = false` (opsi OFF) → tidak baca, tidak tulis. Data lama di disk dibiarkan utuh.
-- Toggle OFF → ON hanya resume; tidak langsung snapshot. Tulis baru terjadi saat ada perubahan tab berikutnya. Ini memenuhi pilihan "OFF = pause": jika di-ON lalu restart tanpa perubahan tab, sesi lama masih dipulihkan.
-- Path unresolved tidak pernah menjadi tab, sehingga selalu ikut tersimpan pada `SaveNow()` berikutnya (tidak terhapus) — inilah yang membuat file hilang tetap bisa kembali.
+- Subscribe to `tabs.CollectionChanged` and `selectedTab` changes. On every event, if `IsEnabled`, write the session.
+- `SaveNow()` builds `Files` = tab paths in order **merged** with the seeded *unresolved* paths (case-insensitive dedup), and `ActiveFile` = `SelectedTab?.FilePath`.
+- `IsEnabled = false` (OFF option) → no reads, no writes. Old data on disk is left intact.
+- Toggling OFF → ON only resumes; it does not snapshot immediately. A new write happens on the next tab change. This satisfies the "OFF = pause" choice: if it is turned ON and then restarted with no tab change, the old session is still restored.
+- Unresolved paths never become tabs, so they are always included in the next `SaveNow()` (never removed) — this is what keeps a missing file restorable.
 
-### 3. Startup Restore & Retensi File Hilang
+### 3. Startup Restore & Missing-File Retention
 
-Di `src/LogTail.UI/App.axaml.cs` (`OnFrameworkInitializationCompleted`), urutannya:
+In `src/LogTail.UI/App.axaml.cs` (`OnFrameworkInitializationCompleted`), the order is:
 
-1. Deteksi `explicitFile` (saat ini dari env `LOGTAIL_AUTO_OPEN_FILE`; ke depan dari CLI arg). Jika ada dan file-nya valid → buka file itu saja, **skip** session restore (memenuhi "file eksplisit menang"). Membuka file eksplisit memicu save biasa, jadi sesi tersimpan berganti menjadi file tersebut — wajar karena sesi merefleksikan apa yang sedang dipakai.
-2. Jika tidak ada `explicitFile` **dan** `RestoreLastSession == true`:
+1. Detect `explicitFile` (currently from the env `LOGTAIL_AUTO_OPEN_FILE`; in the future from a CLI arg). If present and the file is valid → open only that file, **skip** session restore (satisfies "explicit file wins"). Opening the explicit file triggers a normal save, so the saved session switches to that file — reasonable, because the session reflects what is currently in use.
+2. If there is no `explicitFile` **and** `RestoreLastSession == true`:
    - `sessionStore.Load()`.
-   - Bagi `Files` menjadi valid / hilang memakai `LogFileValidator.TryValidateFile`.
-   - Panggil `MainWindowViewModel.RestoreTabs(validPaths, activePath)` (lihat bagian 4) lalu `tracker.SeedUnresolved(missingPaths)`.
-   - Jika ada yang hilang, set `StatusMessage`, mis. `"2 file dari sesi terakhir tidak ditemukan"`.
-3. Jika `RestoreLastSession == false` → tidak membaca sesi sama sekali. `SessionTracker` tetap dibuat tetapi `IsEnabled = false`, jadi tidak ada restore maupun save sampai opsi dinyalakan.
+   - Split `Files` into valid / missing using `LogFileValidator.TryValidateFile`.
+   - Call `MainWindowViewModel.RestoreTabs(validPaths, activePath)` (see section 4) then `tracker.SeedUnresolved(missingPaths)`.
+   - If any are missing, set `StatusMessage`, e.g. `"2 files from the last session were not found"`.
+3. If `RestoreLastSession == false` → do not read the session at all. `SessionTracker` is still created but with `IsEnabled = false`, so there is no restore or save until the option is turned on.
 
-### 4. Perubahan `MainWindowViewModel`
+### 4. Changes to `MainWindowViewModel`
 
 `src/LogTail.UI/ViewModels/MainWindowViewModel.cs`:
 
-- Tambah method batch `internal void RestoreTabs(IReadOnlyList<string> paths, string? activePath)`:
-  - Tambahkan seluruh `TabViewModel` (masing-masing lewat `AttachLinesPerSecondCounter`) **tanpa** men-set `SelectedTab` per item.
-  - Set `SelectedTab` **sekali** di akhir ke tab yang cocok dengan `activePath`, atau tab valid terakhir bila `activePath` tidak ada di daftar. Ini menghindari N-kali start/stop tail karena observer `SelectedTab` sudah ada.
-- Tambah `Interaction<Unit, Unit> ShowSettingsDialog` + `OpenSettingsCommand` (pola sama dengan `ShowOpenFileDialog`).
-- Tambah properti `SettingsViewModel Settings { get; }` (di-inject lewat constructor).
-- **Hapus** `CurrentTheme` dan `SetThemeCommand` — setelah menu `View > Theme` dihapus, keduanya tidak lagi dipakai view; kepemilikan Theme pindah ke `SettingsViewModel`.
+- Add the batch method `internal void RestoreTabs(IReadOnlyList<string> paths, string? activePath)`:
+  - Add all `TabViewModel` (each via `AttachLinesPerSecondCounter`) **without** setting `SelectedTab` per item.
+  - Set `SelectedTab` **once** at the end to the tab matching `activePath`, or the last valid tab if `activePath` is not in the list. This avoids N start/stop tail cycles because the `SelectedTab` observer already exists.
+- Add `Interaction<Unit, Unit> ShowSettingsDialog` + `OpenSettingsCommand` (same pattern as `ShowOpenFileDialog`).
+- Add the property `SettingsViewModel Settings { get; }` (injected via the constructor).
+- **Delete** `CurrentTheme` and `SetThemeCommand` — after the `View > Theme` menu is deleted, they are no longer used by the view; Theme ownership moves to `SettingsViewModel`.
 
-### 5. `SettingsViewModel` + Jendela Settings
+### 5. `SettingsViewModel` + Settings Window
 
-Kelas baru `SettingsViewModel` (`src/LogTail.UI/ViewModels/SettingsViewModel.cs`):
+New `SettingsViewModel` class (`src/LogTail.UI/ViewModels/SettingsViewModel.cs`):
 
 ```csharp
 public sealed class SettingsViewModel : ReactiveObject
@@ -117,90 +117,90 @@ public sealed class SettingsViewModel : ReactiveObject
 }
 ```
 
-Setiap setter memanggil `SettingsStore.Update` dan memicu event terkait. Nilai awal dibaca dari `AppSettings` yang tersimpan.
+Every setter calls `SettingsStore.Update` and raises the related event. Initial values are read from the stored `AppSettings`.
 
-Jendela baru `SettingsWindow.axaml` + `SettingsWindow.axaml.cs` (`src/LogTail.UI/Views/`): dialog modal tanpa resizing, berisi:
-- ComboBox Theme (`ItemsSource = ThemeOptions`, `SelectedItem` two-way ke `Theme`).
-- CheckBox "Reopen last session on startup" two-way ke `RestoreLastSession`.
-- Tombol Close.
+New window `SettingsWindow.axaml` + `SettingsWindow.axaml.cs` (`src/LogTail.UI/Views/`): a modal dialog without resizing, containing:
+- ComboBox Theme (`ItemsSource = ThemeOptions`, `SelectedItem` two-way bound to `Theme`).
+- CheckBox "Reopen last session on startup" two-way bound to `RestoreLastSession`.
+- Close button.
 
-Perubahan Theme langsung diterapkan (live) seperti perilaku menu sebelumnya.
+Theme changes are applied directly (live), matching the previous menu behavior.
 
 ### 6. Layout Gear + Wiring `App`
 
 `src/LogTail.UI/Views/MainWindow.axaml`:
-- Baris atas diubah menjadi `Grid ColumnDefinitions="*,Auto"` — `Menu` di kolom 0, tombol gear (`PathIcon` dengan geometri gear) di kolom 1 (pojok kanan atas).
-- Hapus submenu `View` seluruhnya (Theme pindah ke Settings). Menu yang tersisa hanya `File` (Open…, Separator, Exit).
+- The top row becomes `Grid ColumnDefinitions="*,Auto"` — `Menu` in column 0, the gear button (`PathIcon` with gear geometry) in column 1 (top right corner).
+- Delete the `View` submenu entirely (Theme moves to Settings). The only remaining menu is `File` (Open…, Separator, Exit).
 
 `src/LogTail.UI/Views/MainWindow.axaml.cs`:
-- Daftarkan handler `ShowSettingsDialog` di `WhenActivated`, buka `SettingsWindow` dengan `ViewModel.Settings` sebagai DataContext lewat `ShowDialog(this)`.
+- Register the `ShowSettingsDialog` handler in `WhenActivated`, open `SettingsWindow` with `ViewModel.Settings` as the DataContext via `ShowDialog(this)`.
 
 `src/LogTail.UI/App.axaml.cs`:
-- Buat satu `SettingsViewModel` bersama, `ApplyTheme(settingsVm.Theme)` saat start, subscribe `ThemeChanged → ApplyTheme`.
-- Buat `SessionStore` + `SessionTracker` (`IsEnabled = settingsVm.RestoreLastSession`, sumber observasi `viewModel.Tabs` dan `viewModel.WhenAnyValue(x => x.SelectedTab)`).
+- Create one shared `SettingsViewModel`, `ApplyTheme(settingsVm.Theme)` at start, subscribe `ThemeChanged → ApplyTheme`.
+- Create `SessionStore` + `SessionTracker` (`IsEnabled = settingsVm.RestoreLastSession`, observing `viewModel.Tabs` and `viewModel.WhenAnyValue(x => x.SelectedTab)`).
 - Subscribe `RestoreLastSessionChanged → tracker.IsEnabled`.
-- Dispose tracker pada `desktop.Exit`.
+- Dispose the tracker on `desktop.Exit`.
 
-WHY Theme dipusatkan di `SettingsViewModel`: hanya satu pemilik state Theme, sehingga `App` mengaplikasikan tema dari satu sumber dan tidak ada dua jalur yang bisa tidak sinkron.
+WHY Theme is centered in `SettingsViewModel`: there is a single owner of Theme state, so `App` applies the theme from one source and no two paths can fall out of sync.
 
 ## Error Handling
 
-- `session.json` korup / tidak bisa dibaca → `SessionState` kosong + warning log, aplikasi tetap jalan.
-- Gagal menulis `session.json` → warning log, diabaikan (tidak mengganggu tailing).
-- Semua path restore invalid → jendela kosong + `StatusMessage` memberi tahu.
-- Opsi OFF → tidak restore, tidak save, data lama utuh.
-- `SettingsStore`/`SessionStore` masing-masing hanya menulis file-nya sendiri; `SessionTracker` dipanggil dari UI thread, jadi tidak ada balapan tulis.
+- `session.json` corrupt / unreadable → empty `SessionState` + warning log, the app keeps running.
+- Failed to write `session.json` → warning log, ignored (does not disturb tailing).
+- All restore paths invalid → empty window + `StatusMessage` informs the user.
+- Option OFF → no restore, no save, old data intact.
+- `SettingsStore`/`SessionStore` each write only their own file; `SessionTracker` is invoked from the UI thread, so there is no write race.
 
 ## Testing
 
 Automated:
 
 Core (`LogTail.Core.Tests`):
-1. `SessionStore`: `Load` saat file belum ada → `SessionState` kosong.
-2. `SessionStore`: `Save` lalu `Load` → roundtrip `Files` dan `ActiveFile`.
-3. `SessionStore`: file korup → `SessionState` kosong.
+1. `SessionStore`: `Load` when the file does not exist yet → empty `SessionState`.
+2. `SessionStore`: `Save` then `Load` → roundtrip of `Files` and `ActiveFile`.
+3. `SessionStore`: corrupt file → empty `SessionState`.
 4. `AppSettings`: `RestoreLastSession` default `true`.
-5. `AppSettings`: roundtrip nilai `RestoreLastSession = false`.
+5. `AppSettings`: roundtrip of `RestoreLastSession = false`.
 
 UI (`LogTail.UI.Tests`):
-6. `SettingsViewModel`: Theme awal terbaca dari store default (`System`).
-7. `SettingsViewModel`: set `Theme` → tersimpan di `settings.json` + `ThemeChanged` ter-raise.
-8. `SettingsViewModel`: set `RestoreLastSession` → tersimpan + `RestoreLastSessionChanged` ter-raise.
-9. `SessionTracker`: `IsEnabled = true` + perubahan koleksi tab → `session.json` memuat path tab.
-10. `SessionTracker`: perubahan `SelectedTab` → `ActiveFile` ikut ter-update.
-11. `SessionTracker`: `IsEnabled = false` → tidak ada tulisan sama sekali.
-12. `SessionTracker`: `SeedUnresolved` → path hilang tetap ada di sesi bareng tab valid.
-13. `MainWindowViewModel.RestoreTabs`: menambah tab sesuai urutan, memilih active yang benar.
-14. Update tes lama yang menyentuh `CurrentTheme`/`SetThemeCommand` agar menargetkan `SettingsViewModel`.
+6. `SettingsViewModel`: initial Theme is read from the default store (`System`).
+7. `SettingsViewModel`: set `Theme` → saved in `settings.json` + `ThemeChanged` raised.
+8. `SettingsViewModel`: set `RestoreLastSession` → saved + `RestoreLastSessionChanged` raised.
+9. `SessionTracker`: `IsEnabled = true` + tab collection change → `session.json` contains the tab paths.
+10. `SessionTracker`: `SelectedTab` change → `ActiveFile` is updated too.
+11. `SessionTracker`: `IsEnabled = false` → no writes at all.
+12. `SessionTracker`: `SeedUnresolved` → missing paths remain in the session alongside valid tabs.
+13. `MainWindowViewModel.RestoreTabs`: adds tabs in the correct order, selects the correct active tab.
+14. Update old tests that touch `CurrentTheme`/`SetThemeCommand` so they target `SettingsViewModel`.
 
 Manual smoke:
-- Klik gear → jendela Settings terbuka; ganti Theme → tampilan langsung berubah.
-- Toggle restore OFF → restart → jendela kosong; ON → restart → tab kembali.
-- Hapus salah satu file sesi lalu restart → tab itu hilang, tab lain kembali, `session.json` masih menyimpan path yang hilang.
-- Jalankan dengan file eksplisit (env `LOGTAIL_AUTO_OPEN_FILE`) → hanya file itu yang terbuka, sesi tidak di-restore.
+- Click the gear → the Settings window opens; change the Theme → the view changes immediately.
+- Toggle restore OFF → restart → empty window; ON → restart → tabs return.
+- Delete one of the session files then restart → that tab is gone, the other tabs return, `session.json` still stores the missing path.
+- Run with an explicit file (env `LOGTAIL_AUTO_OPEN_FILE`) → only that file opens, the session is not restored.
 
 ## Out of Scope
 
-- Restore ukuran/posisi window, posisi scroll viewer, dan state AutoScroll per tab.
-- Menu riwayat / recent files.
-- Tombol "Clear session" (bisa menyusul).
-- Implementasi CLI args (`--new-window`, wildcard, folder) — ada spec terpisah.
-- Settings non-modal atau lebih dari satu jendela Settings.
-- Pemangkasan otomatis path yang hilang permanen.
+- Restoring window size/position, scroll viewer position, and per-tab AutoScroll state.
+- Recent files history menu.
+- "Clear session" button (may follow later).
+- CLI args implementation (`--new-window`, wildcard, folder) — handled by a separate spec.
+- Non-modal Settings, or more than one Settings window.
+- Automatic pruning of permanently missing paths.
 
 ## Risks
 
-1. **Path hilang menumpuk permanen:** karena dipertahankan sengaja, `session.json` bisa menyimpan path mati selamanya. Diterima untuk iterasi ini; pemangkasan manual bisa ditambah nanti.
-2. **Urutan berubah:** saat save, path unresolved ditempatkan setelah path tab, jadi urutan tab yang dipulihkan bisa berbeda dari sesi asli bila ada file hilang di tengah. Dampak kosmetik.
-3. **Perubahan kontrak VM:** `CurrentTheme`/`SetThemeCommand` dihapus dari `MainWindowViewModel`, sehingga tes lama harus disesuaikan. Ini konsekuensi langsung dari pemindahan Theme yang diminta.
+1. **Missing paths accumulate permanently:** because they are deliberately retained, `session.json` can store dead paths forever. Accepted for this iteration; manual pruning can be added later.
+2. **Order changes:** on save, unresolved paths are placed after the tab paths, so the restored tab order can differ from the original session if a file is missing in the middle. Cosmetic impact.
+3. **VM contract change:** `CurrentTheme`/`SetThemeCommand` are removed from `MainWindowViewModel`, so old tests must be adjusted. This is a direct consequence of the requested Theme move.
 
 ## Implementation Order
 
-1. Core: `SessionState` record + field `RestoreLastSession` di `AppSettings`.
-2. Core: `SessionStore` (Load/Save/Update) + tes Core.
-3. UI: `SettingsViewModel` + tes.
-4. UI: `SessionTracker` + tes.
-5. UI: `MainWindowViewModel.RestoreTabs`, `Settings`, `OpenSettingsCommand`, hapus `CurrentTheme`/`SetThemeCommand`; sesuaikan tes lama.
-6. UI: `SettingsWindow` + gear di `MainWindow`, hapus menu `View`.
+1. Core: `SessionState` record + field `RestoreLastSession` in `AppSettings`.
+2. Core: `SessionStore` (Load/Save/Update) + Core tests.
+3. UI: `SettingsViewModel` + tests.
+4. UI: `SessionTracker` + tests.
+5. UI: `MainWindowViewModel.RestoreTabs`, `Settings`, `OpenSettingsCommand`, delete `CurrentTheme`/`SetThemeCommand`; adjust old tests.
+6. UI: `SettingsWindow` + gear in `MainWindow`, delete the `View` menu.
 7. UI: wiring `App` (theme + session restore + tracker + event).
-8. Manual smoke sesuai daftar di atas.
+8. Manual smoke test per the list above.

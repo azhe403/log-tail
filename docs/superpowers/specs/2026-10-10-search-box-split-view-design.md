@@ -1,7 +1,7 @@
 # Search Box with Split Results View
 
 **Date:** 2026-10-10 (revised 2026-10-10: scope narrowed to active tab with an All-tabs toggle)
-**Status:** Proposed — awaiting user review
+**Status:** Implemented
 **Scope:** UI only (`ViewModels`, `MainWindow.axaml`, `MainWindow.axaml.cs`, `tests/LogTail.UI.Tests`)
 
 ## 1. Goal
