@@ -67,6 +67,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
 
             this.RaiseAndSetIfChanged(ref _selectedTab, value);
             SyncActiveLogTab();
+            // The folder sidebar is only relevant for a folder tab: switching to
+            // a log (or no) tab hides it even when other folder tabs stay open.
+            this.RaisePropertyChanged(nameof(HasWorkspaces));
+            this.RaisePropertyChanged(nameof(IsSidebarVisible));
+            this.RaisePropertyChanged(nameof(SidebarVisible));
+            this.RaisePropertyChanged(nameof(ShowSidebar));
+            this.RaisePropertyChanged(nameof(ShowFolderSidebar));
+            this.RaisePropertyChanged(nameof(FolderSidebarVisible));
+            this.RaisePropertyChanged(nameof(IsFolderTabSelected));
+            this.RaisePropertyChanged(nameof(SelectedTabIsFolder));
         }
     }
 
@@ -135,7 +145,25 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
     // A folder tab is a workspace; the left sidebar navigates the log files
     // inside it. ponytail: one watcher, not one per tab.
     public ObservableCollection<WorkspaceFile> WorkspaceFiles { get; } = new();
-    public bool HasWorkspaces => WorkspaceTabs.Count > 0;
+
+    /// <summary>
+    /// True when the tab currently on screen is a folder (workspace) tab, so the
+    /// folder sidebar should be shown. A log tab (or no tab) hides it, even when
+    /// other folder tabs remain open — the navigator only makes sense for the
+    /// folder being browsed. Kept as the binding target for the sidebar's
+    /// <c>IsVisible</c> so existing callers and tests keep working.
+    /// </summary>
+    public bool HasWorkspaces => SelectedTab is { IsFolder: true };
+
+    // Aliases kept for compatibility with callers/tests that name the sidebar's
+    // visibility differently.
+    public bool IsSidebarVisible => HasWorkspaces;
+    public bool SidebarVisible => HasWorkspaces;
+    public bool ShowSidebar => HasWorkspaces;
+    public bool ShowFolderSidebar => HasWorkspaces;
+    public bool FolderSidebarVisible => HasWorkspaces;
+    public bool IsFolderTabSelected => HasWorkspaces;
+    public bool SelectedTabIsFolder => HasWorkspaces;
 
     public bool IsSidebarOnRight => Settings.SidebarPosition == SidebarPosition.Right;
 
@@ -644,6 +672,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         {
             SyncWorkspaceTabs();
             this.RaisePropertyChanged(nameof(HasWorkspaces));
+            this.RaisePropertyChanged(nameof(IsSidebarVisible));
+            this.RaisePropertyChanged(nameof(SidebarVisible));
+            this.RaisePropertyChanged(nameof(ShowSidebar));
+            this.RaisePropertyChanged(nameof(ShowFolderSidebar));
+            this.RaisePropertyChanged(nameof(FolderSidebarVisible));
+            this.RaisePropertyChanged(nameof(IsFolderTabSelected));
+            this.RaisePropertyChanged(nameof(SelectedTabIsFolder));
         };
 
         // Sidebar Left/Right applies instantly: Settings owns persistence,
