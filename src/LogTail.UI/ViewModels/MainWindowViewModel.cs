@@ -577,8 +577,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
 
         // Restore settings.
         var loaded = _settings.Load();
+        // Keep the shared buffer (and therefore the per-tab cap, BufferCapacity)
+        // at the configured size: auto-growing up to MaxBufferCapacity let a
+        // single large file balloon memory from ~50k to 2M lines, and the buffer
+        // is not consumed by search/filter yet. Evict oldest instead of growing.
         var initial = loaded.BufferCapacity > 0 ? loaded.BufferCapacity : 50_000;
-        var max = loaded.MaxBufferCapacity >= initial ? loaded.MaxBufferCapacity : initial;
+        var max = initial;
         _buffer = new RingBuffer<EnrichedLogEvent>(initial, max);
         _buffer.Grew += (_, newCapacity) =>
             Dispatcher.UIThread.Post(() => BufferCapacity = newCapacity);
@@ -755,13 +759,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
                 return;
             }
 
+            var replaced = folder.Preview;
+
             var preview = new TabViewModel(fullPath);
             AttachLinesPerSecondCounter(preview);
 
             // Each preview owns a rate window keyed by its own tab model, so
             // the replaced one has to be released here or every file the user
             // clicks leaks a tab model plus its log buffer.
-            if (folder.Preview is { } replaced && _rateSubscriptions.Remove(replaced, out var replacedSubscription))
+            if (replaced is not null && _rateSubscriptions.Remove(replaced, out var replacedSubscription))
             {
                 replacedSubscription.Dispose();
             }
@@ -771,6 +777,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             LoadWorkspaceFor(folder);
 
             await StartTailingForAsync(preview);
+
+            // Free the replaced preview's held lines now that its source has
+            // stopped, so switching large files in folder mode does not keep
+            // every previously previewed file's buffer alive.
+            replaced?.ClearEvents();
             return;
         }
 
@@ -1171,6 +1182,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             _eventsSubscription = null;
             CurrentSource = null;
         }
+
+        // Drop the shared buffer's retained events so switching files does not
+        // accumulate every previously tailed file's lines for the process
+        // lifetime. Search snapshots tab.LogEvents, not this buffer, so this is
+        // safe.
+        _buffer.Clear();
 
         var stopped = _tailingTab;
         _tailingTab = null;
