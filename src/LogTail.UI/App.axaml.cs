@@ -151,7 +151,7 @@ public partial class App : Application
         {
             viewModel.RestoreWorkspaces(
                 session.WorkspaceFolders,
-                session.WorkspacePreviewFiles ?? session.PreviewFiles);
+                session.WorkspacePreviewFiles);
             ApplyWorkspaceSorts(viewModel, session.WorkspaceSorts);
         }
 

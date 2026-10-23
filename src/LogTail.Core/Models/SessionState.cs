@@ -27,5 +27,4 @@ public sealed record SessionState(
     IReadOnlyList<WorkspaceSortState>? WorkspaceSorts = null,
     string? ActivePreview = null,
     IReadOnlyList<string?>? WorkspacePreviewFiles = null,
-    IReadOnlyList<string?>? PreviewFiles = null,
     string? LastOpenedFile = null);

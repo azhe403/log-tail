@@ -103,7 +103,6 @@ public sealed class SessionTracker : IDisposable
             sorts,
             activePreview,
             previewList!,
-            previewList!,
             activePreview));
     }
 

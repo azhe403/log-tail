@@ -45,7 +45,12 @@ Extract the archive and run the `LogTail` executable directly—no external runt
    dotnet build LogTail.slnx
    ```
 
-3. Run the unit test suite:
+3. (Optional) Enable the bundled git hooks so commits run the core test suite:
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+
+4. Run the unit test suite:
    ```bash
    dotnet test LogTail.slnx
    ```

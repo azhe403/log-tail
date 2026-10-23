@@ -1,0 +1,9 @@
+#!/bin/sh
+echo "Running pre-commit unit tests..."
+dotnet test tests/LogTail.Core.Tests/LogTail.Core.Tests.csproj --verbosity quiet --nologo
+RESULT=$?
+if [ $RESULT -ne 0 ]; then
+    echo "❌ Unit tests failed! Commit aborted."
+    exit $RESULT
+fi
+echo "✅ Core unit tests passed. Proceeding with commit."

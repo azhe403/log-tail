@@ -996,16 +996,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
     public void RestoreWorkspaces(IReadOnlyList<string> folderPaths) =>
         RestoreWorkspaces(folderPaths, (IReadOnlyList<string?>?)null);
 
-    public void RestoreWorkspaces(IReadOnlyList<string> folderPaths, string? activePreviewFile)
-    {
-        RestoreWorkspaces(folderPaths, (IReadOnlyList<string?>?)null);
-        if (!string.IsNullOrWhiteSpace(activePreviewFile) &&
-            SelectedTab is { IsFolder: true })
-        {
-            _ = ShowWorkspaceFileAsync(activePreviewFile!);
-        }
-    }
-
     public void RestoreWorkspaces(IReadOnlyList<string> folderPaths, IReadOnlyList<string?>? previewFiles)
     {
         var index = 0;
@@ -1091,6 +1081,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         if (_rateSubscriptions.Remove(tab, out var rateSub))
         {
             rateSub.Dispose();
+        }
+
+        // Keep the per-folder preview bookkeeping in sync so closing a folder
+        // tab does not leak its remembered preview path (or its preview's lines).
+        if (tab.IsFolder)
+        {
+            _folderPreviewPaths.Remove(tab.FilePath);
+            tab.Preview?.ClearEvents();
         }
 
         Tabs.Remove(tab);

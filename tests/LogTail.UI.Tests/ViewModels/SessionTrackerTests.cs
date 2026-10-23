@@ -118,4 +118,36 @@ public sealed class SessionTrackerTests : IDisposable
         state.WorkspaceFolders.Should().BeEmpty();
         state.ActiveFolder.Should().BeNull();
     }
+
+    [Fact]
+    public void Change_WhenFolderTabHasPreview_PersistsPreviewPathAndActivePreview()
+    {
+        using var sut = new SessionTracker(_sessionStore, _tabs, _selected) { IsEnabled = true };
+        var folderTab = new TabViewModel(@"C:\logs\app", isFolder: true);
+        var previewTab = new TabViewModel(@"C:\logs\app\live.log");
+        folderTab.SetPreview(previewTab);
+        _tabs.Add(folderTab);
+        _selected.OnNext(folderTab);
+
+        var state = _sessionStore.Load();
+
+        state.WorkspaceFolders.Should().Equal(@"C:\logs\app");
+        state.WorkspacePreviewFiles.Should().Equal(@"C:\logs\app\live.log");
+        state.ActivePreview.Should().Be(@"C:\logs\app\live.log");
+        state.ActiveFile.Should().Be(@"C:\logs\app\live.log");
+    }
+
+    [Fact]
+    public void Change_WhenFolderTabHasNoPreview_LeavesPreviewNull()
+    {
+        using var sut = new SessionTracker(_sessionStore, _tabs, _selected) { IsEnabled = true };
+        var folderTab = new TabViewModel(@"C:\logs\app", isFolder: true);
+        _tabs.Add(folderTab);
+        _selected.OnNext(folderTab);
+
+        var state = _sessionStore.Load();
+
+        state.WorkspacePreviewFiles.Should().Equal((string?)null);
+        state.ActivePreview.Should().BeNull();
+    }
 }
