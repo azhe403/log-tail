@@ -15,6 +15,10 @@
                     Height="600"
                      DragDrop.AllowDrop="True">
   <rxui:ReactiveWindow.Styles>
+    <Style Selector="TabItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+    </Style>
     <!-- Ensure TabControl content host stretches full width (Avalonia Fluent TabControl uses PART_SelectedContentHost) -->
     <Style Selector="TabControl /template/ ContentPresenter#PART_SelectedContentHost">
       <Setter Property="HorizontalAlignment" Value="Stretch" />

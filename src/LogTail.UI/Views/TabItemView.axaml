@@ -1,14 +1,27 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:LogTail.UI.ViewModels"
+             xmlns:converters="using:Avalonia.Data.Converters"
              x:Class="LogTail.UI.Views.TabItemView"
              x:DataType="vm:TabViewModel">
-    
-    <StackPanel Orientation="Horizontal" Spacing="4">
-        <TextBlock Text="{Binding FileName}" 
-                   VerticalAlignment="Center"
-                   Margin="8,0" />
-        <Button Classes="tab-close"
+     
+    <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+            BorderThickness="0,0,1,0"
+            Padding="8,1,8,1">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <StackPanel Orientation="Vertical" Spacing="0" VerticalAlignment="Center" Margin="0,0">
+                <TextBlock Text="{Binding ParentFolder}"
+                           FontSize="10"
+                           Opacity="0.7"
+                           TextTrimming="CharacterEllipsis"
+                           IsVisible="{Binding ParentFolder, Converter={x:Static converters:StringConverters.IsNotNullOrEmpty}}"
+                           VerticalAlignment="Center" />
+                <TextBlock Text="{Binding FolderName}"
+                           FontSize="12"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+            <Button Classes="tab-close"
                 Content="X"
                 FontSize="10"
                 Padding="2,0"
@@ -31,5 +44,6 @@
             </ToolTip>
         </ToolTip.Tip>
     </StackPanel>
-    
+    </Border>
+     
 </UserControl>

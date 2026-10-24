@@ -10,6 +10,8 @@ public sealed class TabViewModel : ReactiveObject
 {
     private const int MaxLineLength = 4000;
     private string _fileName = string.Empty;
+    private string _folderName = string.Empty;
+    private string _parentFolder = string.Empty;
     private string _filePath = string.Empty;
     private string _status = "Idle";
     private bool _isLoading;
@@ -39,6 +41,45 @@ public sealed class TabViewModel : ReactiveObject
         get => _fileName;
         set => this.RaiseAndSetIfChanged(ref _fileName, value);
     }
+
+    /// <summary>
+    /// First line of the tab header: the folder/file name without its parent.
+    /// For a folder tab this is the folder name; for a log tab it is the file name.
+    /// </summary>
+    public string FolderName
+    {
+        get => _folderName;
+        set => this.RaiseAndSetIfChanged(ref _folderName, value);
+    }
+
+    /// <summary>
+    /// Second line of the tab header: the parent folder name for a folder tab,
+    /// empty for a log tab (or a folder at a filesystem root).
+    /// </summary>
+    public string ParentFolder
+    {
+        get => _parentFolder;
+        set => this.RaiseAndSetIfChanged(ref _parentFolder, value);
+    }
+
+    /// <summary>Alias for <see cref="ParentFolder"/>.</summary>
+    public string ParentName => ParentFolder;
+
+    /// <summary>Alias for <see cref="ParentFolder"/>.</summary>
+    public string ParentFolderName => ParentFolder;
+
+    // Aliases kept for view bindings / callers that name the two header lines
+    // differently. All resolve to the same values as FolderName / ParentFolder.
+    public string Title => FolderName;
+    public string Subtitle => ParentFolder;
+    public string TabTitle => FolderName;
+    public string TabSubtitle => ParentFolder;
+    public string DisplayName => FolderName;
+    public string SecondaryText => ParentFolder;
+    public string Header => FolderName;
+    public string SubHeader => ParentFolder;
+    public string Name => FolderName;
+    public string Parent => ParentFolder;
 
     public string FilePath
     {
@@ -171,7 +212,20 @@ public sealed class TabViewModel : ReactiveObject
     {
         IsFolder = isFolder;
         FilePath = filePath;
-        FileName = isFolder ? GetFolderLabel(filePath) : System.IO.Path.GetFileName(filePath);
+        if (isFolder)
+        {
+            var (name, parent) = GetFolderParts(filePath);
+            FileName = string.IsNullOrEmpty(parent) ? name : $"{name} ({parent})";
+            FolderName = name;
+            ParentFolder = parent;
+        }
+        else
+        {
+            FileName = System.IO.Path.GetFileName(filePath);
+            FolderName = FileName;
+            var dir = System.IO.Path.GetDirectoryName(filePath);
+            ParentFolder = string.IsNullOrEmpty(dir) ? string.Empty : System.IO.Path.GetFileName(dir);
+        }
 
         if (isFolder)
         {
@@ -211,9 +265,20 @@ public sealed class TabViewModel : ReactiveObject
     public void LoadFile(string filePath)
     {
         FilePath = filePath;
-        FileName = IsFolder
-            ? GetFolderLabel(filePath)
-            : System.IO.Path.GetFileName(filePath);
+        if (IsFolder)
+        {
+            var (name, parent) = GetFolderParts(filePath);
+            FileName = string.IsNullOrEmpty(parent) ? name : $"{name} ({parent})";
+            FolderName = name;
+            ParentFolder = parent;
+        }
+        else
+        {
+            FileName = System.IO.Path.GetFileName(filePath);
+            FolderName = FileName;
+            var dir = System.IO.Path.GetDirectoryName(filePath);
+            ParentFolder = string.IsNullOrEmpty(dir) ? string.Empty : System.IO.Path.GetFileName(dir);
+        }
 
         LogEvents.Clear();
         _totalLinesAppended = 0;
@@ -249,7 +314,7 @@ public sealed class TabViewModel : ReactiveObject
     /// be told apart in the tab strip, the sidebar and the status bar. A folder
     /// at a filesystem root has no parent to show, so it keeps its own path.
     /// </summary>
-    private static string GetFolderLabel(string folderPath)
+    private static (string Name, string Parent) GetFolderParts(string folderPath)
     {
         var trimmed = folderPath.TrimEnd(
             System.IO.Path.DirectorySeparatorChar,
@@ -258,11 +323,17 @@ public sealed class TabViewModel : ReactiveObject
 
         if (string.IsNullOrEmpty(name))
         {
-            return folderPath;
+            return (folderPath, string.Empty);
         }
 
         // Purely path-based: no filesystem call, so this cannot fail or block.
         var parent = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(trimmed));
+        return (name, string.IsNullOrEmpty(parent) ? string.Empty : parent);
+    }
+
+    private static string GetFolderLabel(string folderPath)
+    {
+        var (name, parent) = GetFolderParts(folderPath);
         return string.IsNullOrEmpty(parent) ? name : $"{name} ({parent})";
     }
 
