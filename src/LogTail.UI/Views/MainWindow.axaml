@@ -319,6 +319,12 @@
                             Margin="0"
                             MinHeight="20"
                             VerticalAlignment="Center">
+                        <Grid.ContextMenu>
+                          <ContextMenu>
+                            <MenuItem Header="Copy" Click="OnCopySelectedClick" />
+                            <MenuItem Header="Copy entire line" Click="OnCopyLineClick" />
+                          </ContextMenu>
+                        </Grid.ContextMenu>
                         <Border Grid.Column="0"
                                 Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
@@ -335,12 +341,13 @@
                                      FontFamily="Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,monospace"
                                      FontSize="12" />
                         </Border>
-                        <TextBlock Grid.Column="1"
-                                   Text="{Binding Raw.Line}"
-                                   Margin="0,1,10,1"
-                                   TextWrapping="NoWrap"
-                                   FontFamily="Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,monospace"
-                                   FontSize="12" />
+                        <SelectableTextBlock Grid.Column="1"
+                                             Text="{Binding Raw.Line}"
+                                             Margin="0,1,10,1"
+                                             TextWrapping="NoWrap"
+                                             FontFamily="Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,monospace"
+                                             FontSize="12"
+                                             Focusable="True" />
                       </Grid>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>

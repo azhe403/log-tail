@@ -6,23 +6,28 @@ namespace LogTail.UI.Collections;
 /// <summary>
 /// ObservableCollection with single-notification bulk operations for
 /// large log lists. Per-item Add/RemoveAt fires N UI updates which
-/// janks at 50k items; these helpers mutate once and raise one Reset.
+/// janks at 50k items; these helpers mutate the backing list once and
+/// raise a single collection notification.
 /// </summary>
 public sealed class BulkObservableCollection<T> : ObservableCollection<T>
 {
     /// <summary>
-    /// Append many items with a single Reset notification.
+    /// Append many items with a single Add notification.
     /// </summary>
     public void AddRange(IEnumerable<T> items)
     {
         ArgumentNullException.ThrowIfNull(items);
 
-        var list = items as IReadOnlyList<T> ?? items.ToList();
+        // List<T> implements both IList<T> and the non-generic IList the
+        // notification needs, so the cast below can never fail after the items
+        // were already added to the backing collection.
+        var list = items as List<T> ?? items.ToList();
         if (list.Count == 0)
         {
             return;
         }
 
+        var startIndex = Items.Count;
         foreach (var item in list)
         {
             Items.Add(item);
@@ -30,7 +35,8 @@ public sealed class BulkObservableCollection<T> : ObservableCollection<T>
 
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(Count)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs("Item[]"));
-        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+            NotifyCollectionChangedAction.Add, list, startIndex));
     }
 
     /// <summary>

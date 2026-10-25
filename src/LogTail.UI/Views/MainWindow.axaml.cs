@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using System.IO;
@@ -38,6 +39,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
     private ScrollViewer? _scrollViewer;
     private TextBox? _searchTextBox;
     private bool _isProgrammaticScroll;
+    private double? _lockedOffsetY;
     private bool _scrollRequested;
     private IDisposable? _activeTabListener;
     private bool _suppressOffsetEvents;
@@ -148,9 +150,19 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
 
             // Subscribe to ViewModel AutoScroll changes using WhenAnyValue
             this.WhenAnyValue(x => x.ViewModel!.AutoScroll)
-                .Where(autoScroll => autoScroll)
                 .ObserveOn(RxApp.MainThreadScheduler)
-                .Subscribe(_ => RequestScrollToBottom())
+                .Subscribe(autoScroll =>
+                {
+                    if (!autoScroll && _scrollViewer != null)
+                    {
+                        _lockedOffsetY = _scrollViewer.Offset.Y;
+                    }
+                    else if (autoScroll)
+                    {
+                        _lockedOffsetY = null;
+                        RequestScrollToBottom();
+                    }
+                })
                 .DisposeWith(disposables);
 
             // Subscribe to collection changes for auto-scroll on new log items.
@@ -215,6 +227,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         _activeTabListener?.Dispose();
         _activeTabListener = null;
         _scrollViewer = null;
+        // The lock belongs to the viewer that is being detached.
+        _lockedOffsetY = null;
 
         if (ViewModel?.ActiveLogTab == null)
         {
@@ -255,9 +269,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
             }
 
             _scrollViewer = scrollViewer;
-            scrollViewer.GetObservable(ScrollViewer.OffsetProperty)
-                .Skip(1)
-                .Subscribe(OnScrollOffsetChanged)
+            scrollViewer.ScrollChanged += OnScrollChanged;
+            Disposable.Create(() => scrollViewer.ScrollChanged -= OnScrollChanged)
                 .DisposeWith(tabDisposables);
 
             Dispatcher.UIThread.Post(() =>
@@ -267,32 +280,14 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
                 {
                     RequestScrollToBottom();
                 }
+                else
+                {
+                    // AutoScroll may already be off when the tab is attached:
+                    // hold the position this viewer starts at.
+                    _lockedOffsetY = scrollViewer.Offset.Y;
+                }
             }, DispatcherPriority.Loaded);
         }, DispatcherPriority.Background);
-    }
-
-    private void OnScrollOffsetChanged(Vector offset)
-    {
-        if (_scrollViewer == null || _isProgrammaticScroll || _suppressOffsetEvents || ViewModel == null) return;
-
-        var extentHeight = _scrollViewer.Extent.Height;
-        var viewportHeight = _scrollViewer.Viewport.Height;
-
-        // If content fits completely within viewport, there is nothing to scroll.
-        // Respect the user's explicit AutoScroll choice — do not force it on.
-        if (extentHeight <= viewportHeight)
-        {
-            return;
-        }
-
-        var maxOffsetY = extentHeight - viewportHeight;
-        // 15-pixel tolerance from the scroll baseline
-        var isAtBottom = offset.Y >= maxOffsetY - 15.0;
-
-        if (ViewModel.AutoScroll != isAtBottom)
-        {
-            ViewModel.AutoScroll = isAtBottom;
-        }
     }
 
     private void RequestScrollToBottom()
@@ -317,22 +312,37 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
     {
         if (ViewModel?.ActiveLogTab is not { } active || active.LogEvents.Count == 0) return;
 
+        var scrollViewer = _scrollViewer ?? this.FindControl<TabControl>("MainTabControl")?
+            .FindDescendantOfType<ScrollViewer>();
+        if (scrollViewer is null)
+        {
+            return;
+        }
+
+        var maxOffsetY = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
+        SetScrollOffset(scrollViewer, maxOffsetY);
+    }
+
+    /// <summary>
+    /// Runs an offset change that must not be mistaken for a user scroll. The
+    /// guard is released after layout has settled, so the resulting
+    /// ScrollChanged event cannot flip AutoScroll.
+    /// </summary>
+    private void RunProgrammaticScroll(Action scroll)
+    {
         _isProgrammaticScroll = true;
         try
         {
-            var scrollViewer = this.FindControl<TabControl>("MainTabControl")?
-                .FindDescendantOfType<ScrollViewer>();
-            if (scrollViewer != null)
-            {
-                var maxOffsetY = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
-                scrollViewer.Offset = new Vector(scrollViewer.Offset.X, maxOffsetY);
-            }
+            scroll();
         }
         finally
         {
-            Dispatcher.UIThread.Post(() => _isProgrammaticScroll = false, DispatcherPriority.Normal);
+            Dispatcher.UIThread.Post(() => _isProgrammaticScroll = false, DispatcherPriority.ContextIdle);
         }
     }
+
+    private void SetScrollOffset(ScrollViewer sv, double y)
+        => RunProgrammaticScroll(() => sv.Offset = new Vector(sv.Offset.X, y));
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
@@ -349,6 +359,32 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
             return;
         }
 
+        if ((e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0 && e.Key == Key.C)
+        {
+            // Copy from the focused log row. A TextBox (the search box) keeps
+            // its native copy behaviour.
+            var row = this.GetVisualDescendants()
+                .OfType<SelectableTextBlock>()
+                .FirstOrDefault(candidate => candidate.IsFocused);
+            if (row is null)
+            {
+                return;
+            }
+
+            var text = row.SelectedText;
+            if (string.IsNullOrEmpty(text) && row.DataContext is EnrichedLogEvent logEvent)
+            {
+                text = logEvent.Raw.Line;
+            }
+
+            if (!string.IsNullOrEmpty(text))
+            {
+                _ = CopyTextAsync(text);
+                e.Handled = true;
+            }
+            return;
+        }
+
         if (e.Key == Key.Escape && (_searchTextBox?.IsFocused == true || vm.Search.ShowPanel))
         {
             // Close only: the query stays so Ctrl+F or the next keystroke
@@ -356,7 +392,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
             vm.Search.ClosePanel();
             e.Handled = true;
         }
-        else if (e.Key == Key.Enter && _searchTextBox?.IsFocused == true &&
+        else if (e.Key == Key.Enter && vm.Search.ShowPanel &&
                  vm.Search.Matches.FirstOrDefault() is { } first)
         {
             vm.Search.JumpToMatch(first);
@@ -421,7 +457,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         if (scrollViewer.FindDescendantOfType<ItemsControl>() is { } itemsControl &&
             itemsControl.ContainerFromIndex(index) is { } container)
         {
-            container.BringIntoView();
+            RunProgrammaticScroll(container.BringIntoView);
             return true;
         }
 
@@ -429,9 +465,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
         var target = (index * rowHeight) - (scrollViewer.Viewport.Height / 2);
         var maxOffset = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
 
-        _isProgrammaticScroll = true;
-        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, Math.Clamp(target, 0, maxOffset));
-        Dispatcher.UIThread.Post(() => _isProgrammaticScroll = false, DispatcherPriority.Normal);
+        SetScrollOffset(scrollViewer, Math.Clamp(target, 0, maxOffset));
         return true;
     }
 
@@ -466,6 +500,109 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel>
 
         await window.ShowDialog(this);
         interaction.SetOutput(Unit.Default);
+    }
+
+    private async void OnCopySelectedClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item)
+        {
+            return;
+        }
+
+        var text = GetRowText(item)?.SelectedText;
+        if (string.IsNullOrEmpty(text))
+        {
+            text = GetRowEvent(item)?.Raw.Line;
+        }
+
+        await CopyTextAsync(text);
+    }
+
+    private async void OnCopyLineClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item)
+        {
+            return;
+        }
+
+        var text = GetRowEvent(item)?.Raw.Line ?? GetRowText(item)?.Text;
+        await CopyTextAsync(text);
+    }
+
+    private static EnrichedLogEvent? GetRowEvent(MenuItem item)
+        => (item.Parent as ContextMenu)?.PlacementTarget is Control target
+            ? target.DataContext as EnrichedLogEvent
+            : null;
+
+    private static SelectableTextBlock? GetRowText(MenuItem item)
+        => (item.Parent as ContextMenu)?.PlacementTarget is Control target
+            ? target.FindDescendantOfType<SelectableTextBlock>()
+            : null;
+
+    private async Task CopyTextAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard != null)
+        {
+            await clipboard.SetTextAsync(text);
+        }
+    }
+
+    private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        if (sender is not ScrollViewer sv || ViewModel == null) return;
+        if (_suppressOffsetEvents || _isProgrammaticScroll) return;
+        if (_scrollViewer != null && !ReferenceEquals(sv, _scrollViewer)) return;
+
+        var maxOffsetY = Math.Max(0, sv.Extent.Height - sv.Viewport.Height);
+
+        // A scroll can arrive in the same layout pass as new content, so test
+        // the offset first. Treating such a scroll as growth would re-apply the
+        // lock and snap the view back under the user.
+        if (e.OffsetDelta.Y != 0)
+        {
+            _lockedOffsetY = sv.Offset.Y;
+
+            var atBottom = sv.Offset.Y >= maxOffsetY - 15.0;
+            if (ViewModel.AutoScroll)
+            {
+                // Scrolling up while following pauses the tail.
+                if (!atBottom)
+                {
+                    ViewModel.AutoScroll = false;
+                }
+            }
+            else if (maxOffsetY > 0 && e.OffsetDelta.Y > 0 && atBottom)
+            {
+                // Reaching the bottom again resumes following, so the user does
+                // not have to flip the toggle after scrolling back down.
+                ViewModel.AutoScroll = true;
+            }
+            return;
+        }
+
+        // Content grew. While following the tail the collection listener has
+        // already asked for the bottom; while paused, hold the offset the user
+        // left the view at.
+        if (e.ExtentDelta != Vector.Zero &&
+            !ViewModel.AutoScroll &&
+            _lockedOffsetY is { } lockedY)
+        {
+            var targetY = Math.Min(lockedY, maxOffsetY);
+            if (Math.Abs(sv.Offset.Y - targetY) > 0.5)
+            {
+                SetScrollOffset(sv, targetY);
+            }
+
+            // Front eviction can shrink the extent past the lock; keep the lock
+            // inside the new range so the next line cannot jump.
+            _lockedOffsetY = targetY;
+        }
     }
 
     private void OnDragOver(object? sender, DragEventArgs e)
