@@ -5,6 +5,12 @@ using Xunit;
 
 namespace LogTail.Core.Tests.Diagnostics;
 
+/// <summary>
+/// Shares a collection with <see cref="ProcessResourceSamplerTests"/>: the
+/// 400 MB test below would otherwise run concurrently with that class's
+/// working-set measurements and make them unpredictable.
+/// </summary>
+[Collection("process memory")]
 public sealed class BufferMemoryEstimatorTests
 {
     private static EnrichedLogEvent Event(string line) =>

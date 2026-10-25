@@ -5,6 +5,12 @@ using Xunit;
 
 namespace LogTail.Core.Tests.Diagnostics;
 
+/// <summary>
+/// Shares a collection with <see cref="BufferMemoryEstimatorTests"/>: that class
+/// allocates ~400 MB in one test, and resident memory is process-wide state, so
+/// letting the two classes overlap makes any working-set reading meaningless.
+/// </summary>
+[Collection("process memory")]
 public sealed class ProcessResourceSamplerTests
 {
     [Fact]
@@ -89,9 +95,20 @@ public sealed class ProcessResourceSamplerTests
         // Regression guard: the status bar showed ~113 MB while Task Manager
         // showed ~600 MB. Hypothesis was a cached Process object serving stale
         // counters — this proves each reading reflects the process right now.
+        //
+        // The comparison is against an independent reading taken at the same
+        // instant, not against an earlier sample. Growth since an earlier sample
+        // is not a property of the sampler: the resident set of a test host also
+        // moves when sibling tests allocate and free memory, and macOS returns
+        // freed pages to the OS while Windows keeps them resident. Comparing two
+        // historical samples therefore held on Windows and failed on the macOS
+        // CI runners, once ~300 MB of another test's heap disappeared between
+        // them.
         using var sut = new ProcessResourceSampler();
+
+        // Prime the interval. A Process object that never refreshes keeps
+        // serving the counters it read here.
         sut.Sample();
-        var before = sut.Sample().WorkingSetBytes;
 
         var hog = new List<byte[]>();
         for (var i = 0; i < 6; i++)
@@ -106,16 +123,21 @@ public sealed class ProcessResourceSamplerTests
             Array.Fill(chunk, (byte)0xAB);
         }
 
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-
         var after = sut.Sample().WorkingSetBytes;
-        hog.Clear();
 
-        // The reading only has to prove freshness: a Process object with a
-        // cached counter returns the same frozen working set twice, so ANY
-        // growth after holding touched pages fails that. An absolute floor
-        // would be machine-dependent on a loaded CI agent.
-        after.Should().BeGreaterThan(before);
+        using var live = Process.GetCurrentProcess();
+        live.Refresh();
+
+        // A frozen counter still reports the primed reading, which these 60 MB
+        // of touched pages put far outside the tolerance; two live reads taken
+        // microseconds apart agree. Direction does not matter, so a heap that
+        // shrinks elsewhere cannot fail the test.
+        var drift = Math.Abs(after - live.WorkingSet64);
+        drift.Should().BeLessThan(
+            16L * 1024 * 1024,
+            "the sampler reads the same live counter an independent Process object reads");
+
+        // Keep the pages reachable until the reading above is taken.
+        GC.KeepAlive(hog);
     }
 }
