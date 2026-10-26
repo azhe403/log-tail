@@ -42,7 +42,7 @@ public sealed record WorkspaceFile(string Name, string Path, long Size, DateTime
     /// tooltip both report one, and "1 lines" reads broken; a shared helper
     /// keeps them from disagreeing later.
     /// </summary>
-    public static string FormatLineCount(int count) =>
+    public static string FormatLineCount(long count) =>
         count == 1 ? "1 line" : $"{count:N0} lines";
 }
 

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
+using LogTail.Core.Indexing;
 using LogTail.Core.Logging;
 using LogTail.Core.Models;
 
@@ -30,6 +31,23 @@ public sealed class FileTailSource : ILogSource
     private long _fileSizeAtStart;
     private bool _initialLogLoadedRaised;
     private event Action? _initialLogLoaded;
+
+    // True line count, counted from byte zero once at attach and kept current
+    // from the bytes the read loop sees afterwards. -1 means "not known yet";
+    // the UI falls back to its rendered count until the first scan completes.
+    private readonly FileLineCounter _lineCounter = new();
+    private readonly object _lineCountGate = new();
+    private long _lineCount = -1;
+    private long _baseNewlines;
+    private long _baseByteOffset;
+    private bool _baseEndsWithNewline;
+    private bool _baseApplied;
+    private long _liveNewlines;
+    private bool _hasLiveBytes;
+    private bool _liveEndsWithNewline;
+    private CancellationTokenSource? _lineScanCts;
+    private Task? _lineScan;
+    private int _lineCountGeneration;
 
     public FileTailSource(
         string filePath,
@@ -60,6 +78,15 @@ public sealed class FileTailSource : ILogSource
     }
 
     public long FileSize => _fileSizeAtStart;
+
+    public long? TotalLineCount
+    {
+        get
+        {
+            var count = Volatile.Read(ref _lineCount);
+            return count < 0 ? null : count;
+        }
+    }
 
     public async Task StartAsync(CancellationToken ct)
     {
@@ -97,6 +124,7 @@ public sealed class FileTailSource : ILogSource
         _watcher.EnableRaisingEvents = true;
 
         await DrainInitialContentAsync(_cts.Token).ConfigureAwait(false);
+        StartBaseLineScan(_offset);
 
         _pollTimer = new Timer(PollCallback, null, _pollInterval, _pollInterval);
 
@@ -119,6 +147,22 @@ public sealed class FileTailSource : ILogSource
         _watcher = null;
 
         _cts?.Cancel();
+
+        _lineScanCts?.Cancel();
+        if (_lineScan != null)
+        {
+            try
+            {
+                await _lineScan.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected
+            }
+        }
+        _lineScanCts?.Dispose();
+        _lineScanCts = null;
+        _lineScan = null;
 
         if (_readLoop != null)
         {
@@ -383,6 +427,7 @@ public sealed class FileTailSource : ILogSource
                     _logger.Warn($"File truncated (size {currentLength} < offset {_offset}). Resetting offset.");
                     _offset = 0;
                     _partialLineBuffer.Clear();
+                    ResetLineCount();
                 }
 
                 if (_stream.Position != _offset)
@@ -402,6 +447,7 @@ public sealed class FileTailSource : ILogSource
                         break;
                     }
 
+                    RecordLiveBytes(new ReadOnlySpan<byte>(buffer, 0, bytesRead));
                     _offset += bytesRead;
                     var text = Encoding.UTF8.GetString(buffer, 0, bytesRead);
                     _partialLineBuffer.Append(text);
@@ -461,6 +507,7 @@ public sealed class FileTailSource : ILogSource
 
                     _offset = 0; // Start from beginning of new file
                     _partialLineBuffer.Clear();
+                    ResetLineCount();
                     _logger.Info($"Reopened file: {_filePath} at offset 0");
                     return;
                 }
@@ -474,5 +521,134 @@ public sealed class FileTailSource : ILogSource
         }
 
         _logger.Warn($"File not found after rotation: {_filePath}. Will keep retrying.");
+    }
+
+    /// <summary>
+    /// Starts the one-time scan that counts every line from byte zero up to
+    /// <paramref name="byteLimit"/>, the offset the live loop will resume from.
+    /// The scan runs off the UI thread; the count stays unknown until it ends.
+    /// </summary>
+    private void StartBaseLineScan(long byteLimit)
+    {
+        CancellationTokenSource scanCts;
+        int generation;
+        long limit;
+
+        lock (_lineCountGate)
+        {
+            if (_baseApplied || _lineScan is { IsCompleted: false })
+            {
+                return;
+            }
+
+            _baseByteOffset = Math.Max(0, byteLimit);
+            limit = _baseByteOffset;
+            generation = ++_lineCountGeneration;
+            _lineScanCts?.Dispose();
+            scanCts = _cts is null
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            _lineScanCts = scanCts;
+        }
+
+        _lineScan = Task.Run(
+            () => ScanBaseLineCountAsync(limit, generation, scanCts.Token),
+            scanCts.Token);
+    }
+
+    private async Task ScanBaseLineCountAsync(long byteLimit, int generation, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _lineCounter.CountAsync(_filePath, byteLimit, ct).ConfigureAwait(false);
+
+            lock (_lineCountGate)
+            {
+                // A truncation, rotation, or stop made this result irrelevant.
+                if (generation != _lineCountGeneration)
+                {
+                    return;
+                }
+
+                _baseNewlines = result.NewlineCount;
+                _baseEndsWithNewline = result.EndsWithNewline;
+                _baseApplied = true;
+                Volatile.Write(ref _lineCount, ComputeLineCountLocked());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // StopAsync or a reset cancelled the scan.
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Line count failed for {_filePath}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Adds the newlines in a chunk read by the live loop. Counting bytes
+    /// rather than emitted events keeps blank lines in the total, which the
+    /// event pipeline drops.
+    /// </summary>
+    private void RecordLiveBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.IsEmpty)
+        {
+            return;
+        }
+
+        var newlines = FileLineCounter.CountNewlines(bytes);
+        var endsWithNewline = bytes[^1] == (byte)'\n';
+
+        lock (_lineCountGate)
+        {
+            _liveNewlines += newlines;
+            _hasLiveBytes = true;
+            _liveEndsWithNewline = endsWithNewline;
+
+            if (_baseApplied)
+            {
+                Volatile.Write(ref _lineCount, ComputeLineCountLocked());
+            }
+        }
+    }
+
+    /// <summary>
+    /// Forgets the known count after a truncation or rotation. The read loop
+    /// restarts at byte zero, so the live counter rebuilds the total from
+    /// there without a second full scan.
+    /// </summary>
+    private void ResetLineCount()
+    {
+        lock (_lineCountGate)
+        {
+            _lineCountGeneration++;
+            _lineScanCts?.Cancel();
+            _lineScanCts?.Dispose();
+            _lineScanCts = null;
+            _lineScan = null;
+
+            _baseNewlines = 0;
+            _baseByteOffset = 0;
+            _baseEndsWithNewline = false;
+            _baseApplied = true;
+            _liveNewlines = 0;
+            _hasLiveBytes = false;
+            _liveEndsWithNewline = false;
+            Volatile.Write(ref _lineCount, 0);
+        }
+    }
+
+    /// <summary>
+    /// The count is newlines plus one for a final line left unterminated,
+    /// which is how an editor numbers the last line of a file.
+    /// </summary>
+    private long ComputeLineCountLocked()
+    {
+        var newlines = _baseNewlines + _liveNewlines;
+        var endsWithNewline = _hasLiveBytes ? _liveEndsWithNewline : _baseEndsWithNewline;
+        var hasBytes = _baseByteOffset > 0 || _hasLiveBytes;
+        return hasBytes && !endsWithNewline ? newlines + 1 : newlines;
     }
 }

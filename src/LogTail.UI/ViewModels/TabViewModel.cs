@@ -120,6 +120,19 @@ public sealed class TabViewModel : ReactiveObject
         set => this.RaiseAndSetIfChanged(ref _fileSize, value);
     }
 
+    private long? _totalLineCount;
+
+    /// <summary>
+    /// Total lines in the file as counted by the source, including blank
+    /// lines. Null while the initial count is still running; the status bar
+    /// falls back to the rendered count until then.
+    /// </summary>
+    public long? TotalLineCount
+    {
+        get => _totalLineCount;
+        set => this.RaiseAndSetIfChanged(ref _totalLineCount, value);
+    }
+
     public DateTime LastModified
     {
         get => _lastModified;
@@ -282,6 +295,7 @@ public sealed class TabViewModel : ReactiveObject
 
         LogEvents.Clear();
         _totalLinesAppended = 0;
+        TotalLineCount = null;
         LineCount = 0;
         LinesPerSecond = 0;
         ReadBytesPerSecond = 0;

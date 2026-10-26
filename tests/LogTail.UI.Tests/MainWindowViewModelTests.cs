@@ -241,6 +241,28 @@ public sealed class MainWindowViewModelTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task SelectedTabStatus_ShowsTheFilesTrueLineCount_NotTheBufferedCount()
+    {
+        var logger = new LogTail.Core.Logging.ConsoleLogger();
+        var store = new Core.Persistence.SettingsStore(_tempDir, logger);
+        store.Save(new AppSettings(BufferCapacity: 100));
+
+        var sut = CreateViewModel();
+        var path = Path.Combine(_tempDir, "true-count.log");
+        File.WriteAllLines(path, Enumerable.Range(1, 1_000).Select(i => $"line {i}"));
+
+        sut.AddTab(path);
+
+        var counted = await WaitUntilAsync(
+            () => sut.SelectedTab?.TotalLineCount == 1_000,
+            TimeSpan.FromSeconds(30));
+
+        counted.Should().BeTrue($"expected 1,000 lines, got {sut.SelectedTab?.TotalLineCount}");
+        sut.SelectedTab!.LogEvents.Count.Should().Be(100);
+        sut.SelectedTabStatus.Should().Contain("1,000 lines");
+    }
+
+    [AvaloniaFact]
     public void AppResourceText_WhenWindowOpens_ShowsCpuAndMemory()
     {
         var sut = CreateViewModel();
@@ -1404,6 +1426,7 @@ public sealed class MainWindowViewModelTests : IDisposable
         public IObservable<RawLogEvent> Events => _events;
         public bool IsRunning { get; private set; }
         public long FileSize => 0;
+        public long? TotalLineCount { get; set; }
 
         public event Action? InitialLogLoaded;
 

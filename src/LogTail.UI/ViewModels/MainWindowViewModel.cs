@@ -660,6 +660,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
                         t => t.FileSize,
                         t => t.LastModified,
                         t => t.LinesPerSecond,
+                        t => t.TotalLineCount,
                         t => t.LogEvents.Count)
                     .Select(_ => BuildTabStatus(tuple.Item1, tuple.Item2, tuple.Item3)))
             .Switch()
@@ -673,6 +674,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
             .Subscribe(_ =>
             {
                 PruneRates();
+                SyncLineCount();
                 SampleResourcesNow();
             });
 
@@ -1154,6 +1156,28 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Copies the source's true line count onto the tab on screen. Polled on
+    /// the one-second tick because the count is computed off-thread once and
+    /// then advances with each read chunk; one status-bar refresh per second
+    /// is enough and keeps the per-chunk path free of dispatcher work.
+    /// </summary>
+    private void SyncLineCount()
+    {
+        var tab = _tailingTab;
+        var source = CurrentSource;
+        if (tab is null || source is null)
+        {
+            return;
+        }
+
+        var total = source.TotalLineCount;
+        if (tab.TotalLineCount != total)
+        {
+            tab.TotalLineCount = total;
+        }
+    }
+
     private static void PruneWindow(Queue<DateTimeOffset> window, DateTimeOffset now)
     {
         while (window.Count > 0 && (now - window.Peek()) > TimeSpan.FromSeconds(1))
@@ -1533,7 +1557,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IDisposable
 
         // Always show rate — including 0 when idle — so the status bar reads
         // consistently (no missing field that flickers in/out as events arrive).
-        var linesCount = WorkspaceFile.FormatLineCount(tab.LogEvents.Count);
+        // Prefer the file's true line count once the source has counted it;
+        // until then show what is rendered and say the count is still running.
+        var linesCount = tab.TotalLineCount is { } totalLines
+            ? WorkspaceFile.FormatLineCount(totalLines)
+            : $"{WorkspaceFile.FormatLineCount(tab.LogEvents.Count)} (counting…)";
         var rate = $"{tab.LinesPerSecond:0.#} lines/s";
 
         var state = tab.IsTailing ? "tailing" : tab.Status;

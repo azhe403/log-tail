@@ -439,4 +439,100 @@ public sealed class FileTailSourceTests : IAsyncLifetime
         events.Last().Line.Should().Be("live-append-1");
         events.Last().IsHistorical.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task StartAsync_CountsEveryLineInFileNotJustTheTail()
+    {
+        var filePath = Path.Combine(_tempDir, "count-all.log");
+        await File.WriteAllLinesAsync(filePath, Enumerable.Range(1, 1_000).Select(i => $"line-{i}"));
+
+        await using var sut = new FileTailSource(
+            filePath,
+            TimeSpan.FromMilliseconds(50),
+            new ConsoleLogger(),
+            tailLineLimit: 10);
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var counted = await WaitUntilAsync(
+            () => sut.TotalLineCount == 1_000,
+            TimeSpan.FromSeconds(10));
+
+        await sut.StopAsync();
+
+        counted.Should().BeTrue($"expected 1,000 lines, got {sut.TotalLineCount}");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenFileHasNoTrailingNewline_CountsTheLastLine()
+    {
+        var filePath = Path.Combine(_tempDir, "no-final-newline.log");
+        await File.WriteAllTextAsync(filePath, "one\ntwo\nthree");
+
+        await using var sut = new FileTailSource(filePath, TimeSpan.FromMilliseconds(50), new ConsoleLogger());
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var counted = await WaitUntilAsync(() => sut.TotalLineCount == 3, TimeSpan.FromSeconds(10));
+
+        await sut.StopAsync();
+
+        counted.Should().BeTrue($"expected 3 lines, got {sut.TotalLineCount}");
+    }
+
+    [Fact]
+    public async Task StartAsync_CountsBlankLinesThatTheEventPipelineDrops()
+    {
+        var filePath = Path.Combine(_tempDir, "blank-lines.log");
+        await File.WriteAllTextAsync(filePath, "one\n\n\nfour\n");
+
+        await using var sut = new FileTailSource(filePath, TimeSpan.FromMilliseconds(50), new ConsoleLogger());
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var counted = await WaitUntilAsync(() => sut.TotalLineCount == 4, TimeSpan.FromSeconds(10));
+
+        await sut.StopAsync();
+
+        counted.Should().BeTrue($"expected 4 lines, got {sut.TotalLineCount}");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenLinesAppended_TotalLineCountGrows()
+    {
+        var filePath = Path.Combine(_tempDir, "count-live.log");
+        await File.WriteAllTextAsync(filePath, "one\ntwo\n");
+
+        await using var sut = new FileTailSource(filePath, TimeSpan.FromMilliseconds(50), new ConsoleLogger());
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var initial = await WaitUntilAsync(() => sut.TotalLineCount == 2, TimeSpan.FromSeconds(10));
+        initial.Should().BeTrue($"expected the initial count, got {sut.TotalLineCount}");
+
+        await File.AppendAllTextAsync(filePath, "three\n");
+
+        var grew = await WaitUntilAsync(() => sut.TotalLineCount == 3, TimeSpan.FromSeconds(10));
+
+        await sut.StopAsync();
+
+        grew.Should().BeTrue($"expected 3 lines after the append, got {sut.TotalLineCount}");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenFileIsEmpty_ReportsZeroLines()
+    {
+        var filePath = Path.Combine(_tempDir, "empty.log");
+        await File.WriteAllTextAsync(filePath, string.Empty);
+
+        await using var sut = new FileTailSource(filePath, TimeSpan.FromMilliseconds(50), new ConsoleLogger());
+
+        await sut.StartAsync(CancellationToken.None);
+
+        var counted = await WaitUntilAsync(() => sut.TotalLineCount == 0, TimeSpan.FromSeconds(10));
+
+        await sut.StopAsync();
+
+        counted.Should().BeTrue($"expected 0 lines, got {sut.TotalLineCount}");
+    }
 }

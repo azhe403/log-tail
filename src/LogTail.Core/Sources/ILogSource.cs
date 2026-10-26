@@ -19,6 +19,13 @@ public interface ILogSource : IAsyncDisposable
     /// </summary>
     long FileSize { get; }
 
+    /// <summary>
+    /// Total number of lines in the tailed file, counted from byte zero.
+    /// Null while the initial count is still being computed, so callers can
+    /// fall back to the number of lines they have rendered.
+    /// </summary>
+    long? TotalLineCount { get; }
+
     Task StartAsync(CancellationToken ct);
 
     ValueTask StopAsync();
